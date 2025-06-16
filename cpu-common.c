@@ -34,16 +34,17 @@ static QemuCond qemu_work_cond;
  */
 static int pending_cpus;
 
+// 并发安全的管理CPU列表
 void qemu_init_cpu_list(void)
 {
     /* This is needed because qemu_init_cpu_list is also called by the
      * child process in a fork.  */
     pending_cpus = 0;
 
-    qemu_mutex_init(&qemu_cpu_list_lock);
-    qemu_cond_init(&exclusive_cond);
-    qemu_cond_init(&exclusive_resume);
-    qemu_cond_init(&qemu_work_cond);
+    qemu_mutex_init(&qemu_cpu_list_lock); // 保护CPU list的互斥锁
+    qemu_cond_init(&exclusive_cond);      // 操作需要独占，阻塞其他线程（排他运行）
+    qemu_cond_init(&exclusive_resume);    // 控制exclusive模式下的恢复逻辑（排他恢复）
+    qemu_cond_init(&qemu_work_cond);      // 用于通知CPU线程处理任务
 }
 
 void cpu_list_lock(void)
@@ -245,6 +246,7 @@ void end_exclusive(void)
     qemu_mutex_unlock(&qemu_cpu_list_lock);
 }
 
+// 处理同步和互斥，确保当前CPU执行线程的安全
 /* Wait for exclusive ops to finish, and begin cpu execution.  */
 void cpu_exec_start(CPUState *cpu)
 {

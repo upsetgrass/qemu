@@ -1,0 +1,13 @@
+break main.c:1065
+break main
+break main:719
+break cpu_loop.c:40
+break ../accel/tcg/cpu-exec.c:1067
+break cpu-exec.c:1041
+break cpu-exec.c:955
+break cpu-exec.c:959
+break cpu-exec.c:988
+break cpu-exec.c:994
+break cpu-exec.c:1001
+break cpu-exec.c:1020
+break cpu-exec.c:1024

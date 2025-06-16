@@ -694,12 +694,16 @@ static int parse_args(int argc, char **argv)
 
 int main(int argc, char **argv, char **envp)
 {
-    struct target_pt_regs regs1, *regs = &regs1;
-    struct image_info info1, *info = &info1;
-    struct linux_binprm bprm;
-    TaskState *ts;
-    CPUArchState *env;
-    CPUState *cpu;
+    struct target_pt_regs regs1, *regs = &regs1; // CPU寄存器镜像，包括PC寄存器、状态寄存器、通用寄存器等，上下文切换时用其保存信息
+    struct image_info info1, *info = &info1;     // 模拟目标程序的内存映射布局用于内存管理，即虚拟地址分布（代码段、数据段、堆、栈、位置和大小）
+    struct linux_binprm bprm;                    // 模拟一个目标程序启动环境-包含了目标程序启动时传入的命令行参数、环境变量、权限、文件名、装载缓冲区
+    TaskState *ts;      // 维护的guest 线程/进程的状态信息结构体,如信号堆、线程栈、信号处理等
+    CPUArchState *env;  // 不同架构有不同的env，env是CPU状态结构体
+    CPUState *cpu;      // 抽象出的一个虚拟CPU实例，是qemu中的桥梁：连接起：调度器、tcg翻译器、信号处理、gdb调度器等，其中有一个env_ptr指向上一行的env
+    // CPUArchState VS target_pt_regs
+    // CPUArchState：   TCG翻译器执行指令时的上下文、始终存在、随着CPU创建而存在。
+    // target_pt_regs:  模拟内核ABI中暴露给用户态寄存器状态，只在syscall、signal等需要构造用户态寄存器上下文时使用。
+    // 简单来说：env是常用的，regs1是在syscall、signal时会用的
     int optind;
     char **target_environ, **wrk;
     char **target_argv;
@@ -711,10 +715,11 @@ int main(int argc, char **argv, char **envp)
     unsigned long max_reserved_va;
     bool preserve_argv0;
 
+    // 初始化错误打印、模块系统、QOM类型系统环境
     error_init(argv[0]);
-    module_call_init(MODULE_INIT_TRACE);
-    qemu_init_cpu_list();
-    module_call_init(MODULE_INIT_QOM);
+    module_call_init(MODULE_INIT_TRACE); // 初始化trace模块，MODULE_INIT_TRACE-运行时事件跟踪，插桩记录关键事件
+    qemu_init_cpu_list();                // 初始化QEMU中CPU列表的同步机制
+    module_call_init(MODULE_INIT_QOM);   // 对象模型模块（QOM）
 
     envlist = envlist_create();
 
@@ -734,7 +739,7 @@ int main(int argc, char **argv, char **envp)
     /* Read the stack limit from the kernel.  If it's "unlimited",
        then we can do little else besides use the default.  */
     {
-        struct rlimit lim;
+        struct rlimit lim; // 栈限制大小
         if (getrlimit(RLIMIT_STACK, &lim) == 0
             && lim.rlim_cur != RLIM_INFINITY
             && lim.rlim_cur == (target_long)lim.rlim_cur
@@ -745,21 +750,24 @@ int main(int argc, char **argv, char **envp)
 
     cpu_model = NULL;
 
+    // 注册tarce和plugin的命令行参数 （注册概念：将一个描述trace选项的结构体加入到全局列表中，让后续解析器或调度器可以调用它）
     qemu_add_opts(&qemu_trace_opts);
     qemu_plugin_add_opts();
-
+    // 处理传入的参数（模拟的程序、启用的插件...）
     optind = parse_args(argc, argv);
-
+    // 配置日志文件名和启用哪些日志类别
     qemu_set_log_filename_flags(last_log_filename,
                                 last_log_mask | (enable_strace * LOG_STRACE),
                                 &error_fatal);
-
+    // 初始trace系统
     if (!trace_init_backends()) {
         exit(1);
     }
     trace_init_file();
+    // 加载plugin插件
     qemu_plugin_load_list(&plugins, &error_fatal);
 
+    // 清除这些结构体，防止脏数据
     /* Zero out regs */
     memset(regs, 0, sizeof(struct target_pt_regs));
 
@@ -768,16 +776,19 @@ int main(int argc, char **argv, char **envp)
 
     memset(&bprm, 0, sizeof (bprm));
 
+    // 初始化路径相关逻辑，告诉模拟器用哪里的动态链接器（异架构情况下默认路径的动态链接无法使用或不存在）
     /* Scan interp_prefix dir for replacement files. */
     init_paths(interp_prefix);
 
+    // 初始化uname返回信息,uname是一个系统调用，用来获取当前运行内核的信息-模拟系统返回的uname内容
+    // guest 程序如果获取内核信息，那么会直接拿到host的内核信息，这不符合guest环境，所以需要单独特殊处理
     init_qemu_uname_release();
 
     /*
      * Manage binfmt-misc open-binary flag
      */
     errno = 0;
-    execfd = qemu_getauxval(AT_EXECFD);
+    execfd = qemu_getauxval(AT_EXECFD); // 文件描述符execfd
     if (errno != 0) {
         execfd = open(exec_path, O_RDONLY);
         if (execfd < 0) {
@@ -787,25 +798,27 @@ int main(int argc, char **argv, char **envp)
     }
 
     /* Resolve executable file name to full path name */
-    if (realpath(exec_path, real_exec_path)) {
+    if (realpath(exec_path, real_exec_path)) { // 获取绝对路径
         exec_path = real_exec_path;
     }
-
+    
     /*
      * get binfmt_misc flags
      */
-    preserve_argv0 = !!(qemu_getauxval(AT_FLAGS) & AT_FLAGS_PRESERVE_ARGV0);
+    preserve_argv0 = !!(qemu_getauxval(AT_FLAGS) & AT_FLAGS_PRESERVE_ARGV0); 
 
     /*
      * Manage binfmt-misc preserve-arg[0] flag
      *    argv[optind]     full path to the binary
      *    argv[optind + 1] original argv[0]
      */
-    if (optind + 1 < argc && preserve_argv0) {
+    if (optind + 1 < argc && preserve_argv0) { // 解析binfmt_misc的flag，用于自动调用qemu-arch去执行guest程序
         optind++;
     }
 
     if (cpu_model == NULL) {
+        // 根据文件描述符获取到e_flags字段，推导应该仿真的CPU型号
+        //（文件描述符是指向ELF文件的一个打开的只读指针，可以用来read/lseek/fstat/mmap）
         cpu_model = cpu_get_model(get_elf_eflags(execfd));
     }
     cpu_type = parse_cpu_option(cpu_model);
@@ -816,11 +829,11 @@ int main(int argc, char **argv, char **envp)
         AccelClass *ac = ACCEL_GET_CLASS(accel);
 
         accel_init_interfaces(ac);
-        object_property_set_bool(OBJECT(accel), "one-insn-per-tb",
-                                 opt_one_insn_per_tb, &error_abort);
-        object_property_set_int(OBJECT(accel), "tb-size",
+        object_property_set_bool(OBJECT(accel), "one-insn-per-tb",   // one-insn-per-tb = true - 一条一条翻译 false - 采用下面的tb-size方式  是否打开通过qemu的命令行参数
+                                 opt_one_insn_per_tb, &error_abort); 
+        object_property_set_int(OBJECT(accel), "tb-size",  // QEMU是通用解释器，目标指令不是定长的，所以用字节数去限制：比如tb-size=128bit：32条4bit 64条2bit 4条32bit更加合理
                                 opt_tb_size, &error_abort);
-        ac->init_machine(NULL);
+        ac->init_machine(NULL);  // 机器的初始化
     }
 
     /*
@@ -828,15 +841,16 @@ int main(int argc, char **argv, char **envp)
      * This will do nothing if !TARGET_PAGE_BITS_VARY.
      * The most efficient setting is to match the host.
      */
-    host_page_size = qemu_real_host_page_size();
-    set_preferred_target_page_bits(ctz32(host_page_size));
-    finalize_target_page_bits();
+    host_page_size = qemu_real_host_page_size(); // 获取host真实大小
+    set_preferred_target_page_bits(ctz32(host_page_size)); // 设置guest页大小与host相同
+    finalize_target_page_bits();    // 避免guest架构支持多种页大小，不需要做全特性支持行为，所以直接固定页大小，简化内存管理单元行为（页表、内存分配、地址映射、TBL模拟等...）
 
-    cpu = cpu_create(cpu_type);
-    env = cpu_env(cpu);
-    cpu_reset(cpu);
+    cpu = cpu_create(cpu_type);     // 利用类型创建CPU实例
+    env = cpu_env(cpu);                      // 从CPU实例中提取出env
+    cpu_reset(cpu);       // 初始化寄存器
     thread_cpu = cpu;
 
+    // 对guest内存地址进行合理性检查并给定预留值
     /*
      * Reserving too much vm space via mmap can run into problems with rlimits,
      * oom due to page table creation, etc.  We will still try it, if directed
@@ -869,12 +883,13 @@ int main(int argc, char **argv, char **envp)
 #pragma GCC diagnostic ignored "-Wtype-limits"
 #pragma GCC diagnostic ignored "-Wtautological-compare"
 
+    // task_unmapped_base是guest用户空间中 mmap 动态分配区域（未映射区域）的基地址，保证guest虚拟地址使用合法、不重叠不越界
     /*
      * Select an initial value for task_unmapped_base that is in range.
      */
     if (reserved_va) {
         if (TASK_UNMAPPED_BASE < reserved_va) {
-            task_unmapped_base = TASK_UNMAPPED_BASE;
+            task_unmapped_base = TASK_UNMAPPED_BASE; 
         } else {
             /* The most common default formula is TASK_SIZE / 3. */
             task_unmapped_base = TARGET_PAGE_ALIGN(reserved_va / 3);
@@ -887,6 +902,8 @@ int main(int argc, char **argv, char **envp)
     }
     mmap_next_start = task_unmapped_base;
 
+    // 为ELF动态链接可执行文件（Position Independent Executable, PIE）
+    // ，选择合适的默认加载基地址（现代linux gcc编译生成的都是PIE可执行文件）
     /* Similarly for elf_et_dyn_base. */
     if (reserved_va) {
         if (ELF_ET_DYN_BASE < reserved_va) {
@@ -903,7 +920,7 @@ int main(int argc, char **argv, char **envp)
     }
 
 #pragma GCC diagnostic pop
-
+    // 加密子系统
     {
         Error *err = NULL;
         if (seed_optarg != NULL) {
@@ -917,9 +934,10 @@ int main(int argc, char **argv, char **envp)
         }
     }
 
-    target_environ = envlist_to_environ(envlist, NULL);
-    envlist_free(envlist);
+    target_environ = envlist_to_environ(envlist, NULL); // target_environ就是guest的envp
+    envlist_free(envlist); // 释放掉
 
+    // 通过mmap_min_addr来限制guest映射到host的地址范围（不能小于mmap_min_addr中的存值）
     /*
      * Read in mmap_min_addr kernel parameter.  This value is used
      * When loading the ELF image to determine whether guest_base
@@ -938,7 +956,6 @@ int main(int argc, char **argv, char **envp)
             fclose(fp);
         }
     }
-
     /*
      * We prefer to not make NULL pointers accessible to QEMU.
      * If we're in a chroot with no /proc, fall back to 1 page.
@@ -954,7 +971,7 @@ int main(int argc, char **argv, char **envp)
      * Prepare copy of argv vector for target.
      */
     target_argc = argc - optind;
-    target_argv = g_new0(char *, target_argc + 1);
+    target_argv = g_new0(char *, target_argc + 1); // 准备guest的参数表
 
     /*
      * If argv0 is specified (using '-0' switch) we replace
@@ -969,16 +986,18 @@ int main(int argc, char **argv, char **envp)
     }
     target_argv[target_argc] = NULL;
 
+    // 模拟的进程控制块-ts,并初始化
     ts = g_new0(TaskState, 1);
     init_task_state(ts);
     /* build Task State */
-    ts->info = info;
-    ts->bprm = &bprm;
-    cpu->opaque = ts;
+    ts->info = info; // guset EIF加载信息
+    ts->bprm = &bprm; // bprm启动环境
+    cpu->opaque = ts; // 又把进程控制块给到了cpu的opaque中
     task_settid(ts);
 
-    fd_trans_init();
+    fd_trans_init(); // guest系统调用使用的fd和host fd不同，需要有一张映射表 guest_fd 3 -> host_fd 11 懒加载，现在是空表
 
+    // 加载guest程序
     ret = loader_exec(execfd, exec_path, target_argv, target_environ, regs,
         info, &bprm);
     if (ret != 0) {
@@ -986,10 +1005,10 @@ int main(int argc, char **argv, char **envp)
         _exit(EXIT_FAILURE);
     }
 
+    // 释放target_environ所占的内存
     for (wrk = target_environ; *wrk; wrk++) {
         g_free(*wrk);
     }
-
     g_free(target_environ);
 
     if (qemu_loglevel_mask(CPU_LOG_PAGE)) {
@@ -998,7 +1017,7 @@ int main(int argc, char **argv, char **envp)
             fprintf(f, "guest_base  %p\n", (void *)guest_base);
             fprintf(f, "page layout changed following binary load\n");
             page_dump(f);
-
+            // 打印各种内存分布和地址映射、命令行参数等
             fprintf(f, "end_code    0x" TARGET_ABI_FMT_lx "\n",
                     info->end_code);
             fprintf(f, "start_code  0x" TARGET_ABI_FMT_lx "\n",
@@ -1023,16 +1042,16 @@ int main(int argc, char **argv, char **envp)
         }
     }
 
-    target_set_brk(info->brk);
-    syscall_init();
-    signal_init(rtsig_map);
+    target_set_brk(info->brk); // 堆边界
+    syscall_init();         // 注册各系统调用处理函数
+    signal_init(rtsig_map); // 初始化信号处理系统
 
     /* Now that we've loaded the binary, GUEST_BASE is fixed.  Delay
        generating the prologue until now so that the prologue can take
        the real value of GUEST_BASE into account.  */
-    tcg_prologue_init();
+    tcg_prologue_init(); // tcg的前导代码，用于状态同步和TB调度
 
-    target_cpu_copy_regs(env, regs);
+    target_cpu_copy_regs(env, regs); // regs存入env中
 
     if (gdbstub) {
         gdbserver_start(gdbstub, &error_fatal);
@@ -1041,7 +1060,7 @@ int main(int argc, char **argv, char **envp)
 #ifdef CONFIG_SEMIHOSTING
     qemu_semihosting_guestfd_init();
 #endif
-
+    // 模拟CPU开始执行guest程序，并在运行过程中处理系统调用、中断、异常等事件，使得guest程序按照真实CPU被逐步执行
     cpu_loop(env);
     /* never exits */
     return 0;

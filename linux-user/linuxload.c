@@ -160,6 +160,7 @@ int loader_exec(int fdexec, const char *filename, char **argv, char **envp,
         && bprm->buf[1] == 'E'
         && bprm->buf[2] == 'L'
         && bprm->buf[3] == 'F') {
+        // 加载ELF可执行文件，设置程序堆栈与参数，并最终准备用户态进程的执行环境。
         retval = load_elf_binary(bprm, infop);
 #if defined(TARGET_HAS_BFLT)
     } else if (bprm->buf[0] == 'b'

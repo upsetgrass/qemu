@@ -241,23 +241,25 @@ static inline TranslationBlock *tb_lookup(CPUState *cpu, vaddr pc,
     /* we should never be trying to look up an INVALID tb */
     tcg_debug_assert(!(cflags & CF_INVALID));
 
-    hash = tb_jmp_cache_hash_func(pc);
-    jc = cpu->tb_jmp_cache;
+    hash = tb_jmp_cache_hash_func(pc); // 计算Hash值，定位Jump Cache槽位
+    jc = cpu->tb_jmp_cache; // tb_jmp_cache -> CPUJumpCache{}
 
-    tb = qatomic_read(&jc->array[hash].tb);
+    tb = qatomic_read(&jc->array[hash].tb); // 从Jump Cache读取该槽位上的TB
+    // 判断是否是同一个TB：pc相等、cs_base代码段基地址一致、flags-CPU状态一致（特权、ISA状态等）、cflags-控制TB行为的标志一致
     if (likely(tb &&
                jc->array[hash].pc == pc &&
                tb->cs_base == cs_base &&
                tb->flags == flags &&
                tb_cflags(tb) == cflags)) {
-        goto hit;
+        goto hit; // 如果一致，认为缓存命中，跳转到hit
     }
-
+    // 没有命中执行这里-主哈希表查找（完整表），比Jump Cache慢，如果主表也找不到，那么说明没有翻译过这个地址
     tb = tb_htable_lookup(cpu, pc, cs_base, flags, cflags);
     if (tb == NULL) {
         return NULL;
     }
-
+     
+    // 快路径cache，写入pc
     jc->array[hash].pc = pc;
     qatomic_set(&jc->array[hash].tb, tb);
 
@@ -503,7 +505,8 @@ cpu_tb_exec(CPUState *cpu, TranslationBlock *itb, int *tb_exit)
     return last_tb;
 }
 
-
+// 调用钩子函数用于环境准备，钩子函数是一种函数回调机制
+// TCG或KVM作为后端，在QEMU初始化时向主框架注册了它自己的回调函数-cpu_exec_enter,主框架在运行时会调用这些函数，以完成架构无关的操作。
 static void cpu_exec_enter(CPUState *cpu)
 {
     const TCGCPUOps *tcg_ops = cpu->cc->tcg_ops;
@@ -940,24 +943,25 @@ static inline void cpu_loop_exec_tb(CPUState *cpu, TranslationBlock *tb,
 #endif
 }
 
-/* main execution loop */
-
+/* main execution loop */ 
+// 最主要的loop
 static int __attribute__((noinline))
 cpu_exec_loop(CPUState *cpu, SyncClocks *sc)
 {
     int ret;
 
     /* if an exception is pending, we execute it here */
+    // 每次从TB跳转出来都需要检查是否有需要立刻处理的异常，如果有，那么跳出循环返回ret，如果没有，继续执行
     while (!cpu_handle_exception(cpu, &ret)) {
         TranslationBlock *last_tb = NULL;
         int tb_exit = 0;
-
+        // 检查是否有中断需要处理，同上，是否跳出循环，返回ret
         while (!cpu_handle_interrupt(cpu, &last_tb)) {
-            TranslationBlock *tb;
-            vaddr pc;
-            uint64_t cs_base;
-            uint32_t flags, cflags;
-
+            TranslationBlock *tb; // // TB中存的是一段已经翻译完的guest 指令的映射，tb结构体中存储了pc、cs_base flags cflags信息
+            vaddr pc; // 当前指令地址
+            uint64_t cs_base; // code segment 段基地址，确保TB缓存的一致性与地址映射准确？？？
+            uint32_t flags, cflags; // flags中包含了ISA状态、特权、TB缓存key
+            // 从cpu_env(cpu)中获取当前CPU的指令流的上下文状态到pc cs_base flags中
             cpu_get_tb_cpu_state(cpu_env(cpu), &pc, &cs_base, &flags);
 
             /*
@@ -967,31 +971,34 @@ cpu_exec_loop(CPUState *cpu, SyncClocks *sc)
              * have CF_INVALID set, -1 is a convenient invalid value that
              * does not require tcg headers for cpu_common_reset.
              */
-            cflags = cpu->cflags_next_tb;
+            // cflags中包含了当前TB的行为控制开关：是否启用TB直接跳转优化、host指针跳转方式、启用GDB单步调试模式
+            cflags = cpu->cflags_next_tb; // 标记下一个tb的cflags
             if (cflags == -1) {
-                cflags = curr_cflags(cpu);
+                cflags = curr_cflags(cpu);// 当前CPU需要的翻译块控制标志cflags
             } else {
                 cpu->cflags_next_tb = -1;
             }
 
+            // 断点检查
             if (check_for_breakpoints(cpu, pc, &cflags)) {
                 break;
             }
 
+            // 从TB缓存中查找已有翻译块的函数
             tb = tb_lookup(cpu, pc, cs_base, flags, cflags);
             if (tb == NULL) {
                 CPUJumpCache *jc;
                 uint32_t h;
 
                 mmap_lock();
-                tb = tb_gen_code(cpu, pc, cs_base, flags, cflags);
+                tb = tb_gen_code(cpu, pc, cs_base, flags, cflags); // IR->TB???
                 mmap_unlock();
 
                 /*
                  * We add the TB in the virtual pc hash table
                  * for the fast lookup
                  */
-                h = tb_jmp_cache_hash_func(pc);
+                h = tb_jmp_cache_hash_func(pc); // 将这里处理过的放到cache中
                 jc = cpu->tb_jmp_cache;
                 jc->array[h].pc = pc;
                 qatomic_set(&jc->array[h].tb, tb);
@@ -1009,15 +1016,16 @@ cpu_exec_loop(CPUState *cpu, SyncClocks *sc)
             }
 #endif
             /* See if we can patch the calling TB. */
-            if (last_tb) {
+            if (last_tb) { // last_tb-上一次的TB，能调到当前的TB，patch跳转表（内存槽）
                 tb_add_jump(last_tb, tb_exit, tb);
             }
 
-            cpu_loop_exec_tb(cpu, tb, pc, &last_tb, &tb_exit);
+            // 核心代码，执行TB，内部会调用TCG生成的代码，tb_exit会返回退出原因（跳转、异常、breakpoint...）
+            cpu_loop_exec_tb(cpu, tb, pc, &last_tb, &tb_exit); 
 
             /* Try to align the host and virtual clocks
                if the guest is in advance */
-            align_clocks(sc, cpu);
+            align_clocks(sc, cpu); // 同步
         }
     }
     return ret;
@@ -1027,7 +1035,7 @@ static int cpu_exec_setjmp(CPUState *cpu, SyncClocks *sc)
 {
     /* Prepare setjmp context for exception handling. */
     if (unlikely(sigsetjmp(cpu->jmp_env, 0) != 0)) {
-        cpu_exec_longjmp_cleanup(cpu);
+        cpu_exec_longjmp_cleanup(cpu); // 异常跳转后的 cleanup 处理逻辑
     }
 
     return cpu_exec_loop(cpu, sc);
@@ -1036,7 +1044,7 @@ static int cpu_exec_setjmp(CPUState *cpu, SyncClocks *sc)
 int cpu_exec(CPUState *cpu)
 {
     int ret;
-    SyncClocks sc = { 0 };
+    SyncClocks sc = { 0 }; // 用于host和guest之间的时间、周期差计算与对齐
 
     /* replay_interrupt may need current_cpu */
     current_cpu = cpu;
@@ -1045,7 +1053,7 @@ int cpu_exec(CPUState *cpu)
         return EXCP_HALTED;
     }
 
-    RCU_READ_LOCK_GUARD();
+    RCU_READ_LOCK_GUARD(); // 加RCU读锁，保护对共享结构的访问
     cpu_exec_enter(cpu);
 
     /*
