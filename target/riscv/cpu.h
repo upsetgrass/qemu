@@ -511,7 +511,7 @@ struct CPUArchState {
 struct ArchCPU {
     CPUState parent_obj;
 
-    CPURISCVState env;
+    CPURISCVState env; // ArchCPU.env就是 CPUArchState
 
     GDBFeature dyn_csr_feature;
     GDBFeature dyn_vreg_feature;

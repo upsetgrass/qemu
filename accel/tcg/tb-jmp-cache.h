@@ -28,6 +28,6 @@ typedef struct CPUJumpCache {
         TranslationBlock *tb;
         vaddr pc;
     } array[TB_JMP_CACHE_SIZE];
-} CPUJumpCache;
+} CPUJumpCache; // 
 
 #endif /* ACCEL_TCG_TB_JMP_CACHE_H */
