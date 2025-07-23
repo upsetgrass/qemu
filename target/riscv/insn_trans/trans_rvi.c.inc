@@ -568,7 +568,7 @@ static void gen_addi2_i128(TCGv retl, TCGv reth,
 
 static bool trans_addi(DisasContext *ctx, arg_addi *a)
 {
-    return gen_arith_imm_fn(ctx, a, EXT_NONE, tcg_gen_addi_tl, gen_addi2_i128);
+    return gen_arith_imm_fn(ctx, a, EXT_NONE, tcg_gen_addi_tl, gen_addi2_i128); // target/riscv/translate.c:893
 }
 
 static void gen_slt(TCGv ret, TCGv s1, TCGv s2)

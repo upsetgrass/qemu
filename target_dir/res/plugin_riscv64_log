@@ -1,0 +1,4 @@
+runging on riscv64, smp_vcpus=0, mode=user-mode
+vcpu_num=1
+static_counter:10662
+dynamoic_counter:1833733

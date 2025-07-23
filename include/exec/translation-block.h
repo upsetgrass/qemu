@@ -35,7 +35,7 @@ typedef ram_addr_t tb_page_addr_t;
  * @ptr and @size.
  * Note: the address of search data can be obtained by adding @size to @ptr.
  */
-// TB缓存相关数据结构，qemu中有一颗二叉搜索树来组织所有的TB，用于查找，使用ptr和size来判断两个TB是否是同一个TB，是否在同一个位置
+// TB缓存相关数据结构
 struct tb_tc {
     const void *ptr;    /* pointer to the translated code */ // 指向host code buffer的指针
     size_t size;    // 代码指令条数
@@ -57,7 +57,7 @@ struct TranslationBlock {
      * Unwind information is taken as offsets from the page, to be
      * deposited into the "current" PC.
      */
-    vaddr pc; // 当前TB的虚拟地址
+    vaddr pc; // 当前TB的guest pc虚拟地址
 
     /* 
      * Target-specific data associated with the TranslationBlock, e.g.:

@@ -311,24 +311,24 @@ typedef struct TCGTempSet {
 typedef uint32_t TCGLifeData;
 
 struct TCGOp {
-    TCGOpcode opc   : 8;
-    unsigned nargs  : 8;
+    TCGOpcode opc   : 8; // 操作码
+    unsigned nargs  : 8; // 参数个数
 
     /* Parameters for this opcode.  See below.  */
-    unsigned param1 : 8;
-    unsigned param2 : 8;
+    unsigned param1 : 8; // 操作码标志位
+    unsigned param2 : 8; // 扩展
 
     /* Lifetime data of the operands.  */
-    TCGLifeData life;
+    TCGLifeData life; // 操作数声明周期
 
     /* Next and previous opcodes.  */
-    QTAILQ_ENTRY(TCGOp) link;
+    QTAILQ_ENTRY(TCGOp) link; // 双向链表结构，维护IR链
 
     /* Register preferences for the output(s).  */
-    TCGRegSet output_pref[2];
+    TCGRegSet output_pref[2]; // 输出寄存器偏好
 
     /* Arguments for the opcode.  */
-    TCGArg args[];
+    TCGArg args[]; // 操作数
 };
 
 #define TCGOP_CALLI(X)    (X)->param1
@@ -381,9 +381,9 @@ struct TCGContext {
        here, because there's too much arithmetic throughout that relies
        on addition and subtraction working on bytes.  Rely on the GCC
        extension that allows arithmetic on void*.  */
-    void *code_gen_buffer;
+    void *code_gen_buffer; // 所有 TB 使用的 代码段缓存的起始地址
     size_t code_gen_buffer_size;
-    void *code_gen_ptr;
+    void *code_gen_ptr; // 全局缓冲区的写入位置，会随着多个 TB 生成而增长
     void *data_gen_ptr;
 
     /* Threshold to flush the translated code buffer.  */
@@ -886,7 +886,7 @@ static inline ptrdiff_t tcg_tbrel_diff(TCGContext *s, const void *target)
 
 static inline size_t tcg_current_code_size(TCGContext *s)
 {
-    return tcg_ptr_byte_diff(s->code_ptr, s->code_buf);
+    return tcg_ptr_byte_diff(s->code_ptr, s->code_buf); // s->code_ptr - s->code_buf
 }
 
 /**

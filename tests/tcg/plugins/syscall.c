@@ -173,7 +173,7 @@ static void vcpu_syscall_ret(qemu_plugin_id_t id, unsigned int vcpu_idx,
 static void print_entry(gpointer val, gpointer user_data)
 {
     SyscallStats *entry = (SyscallStats *) val;
-    int64_t syscall_num = entry->num;
+    int64_t syscall_num = entry->num; // linux-headers/asm-riscv/unistd.h -> linux-headers/asm-riscv/unistd_64.h
     g_autofree gchar *out = g_strdup_printf(
         "%-13" PRIi64 "%-6" PRIi64 " %" PRIi64 "\n",
         syscall_num, entry->calls, entry->errors);

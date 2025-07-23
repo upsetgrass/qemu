@@ -83,7 +83,7 @@ static inline void tb_lock_pages(const TranslationBlock *tb) { }
  * and because the two pages of a TranslationBlock are always contiguous,
  * use a single data structure to record all TranslationBlocks.
  */
-static IntervalTreeRoot tb_root;
+static IntervalTreeRoot tb_root; // guest区域树
 
 static void tb_remove_all(void)
 {
@@ -111,7 +111,7 @@ static void tb_record(TranslationBlock *tb)
         assert(!(flags & PAGE_WRITE));
     }
 
-    interval_tree_insert(&tb->itree, &tb_root);
+    interval_tree_insert(&tb->itree, &tb_root); // 插入guest区域树
 }
 
 /* Call with mmap_lock held. */
@@ -759,7 +759,7 @@ static void tb_remove(TranslationBlock *tb)
 }
 #endif /* CONFIG_USER_ONLY */
 
-/* flush all the translation blocks */
+/* flush all the translation blocks */ // tb_flush_count-本次操作发起时的 TB flush 版本号（防止重复）
 static void do_tb_flush(CPUState *cpu, run_on_cpu_data tb_flush_count)
 {
     bool did_flush = false;
@@ -767,20 +767,22 @@ static void do_tb_flush(CPUState *cpu, run_on_cpu_data tb_flush_count)
     mmap_lock();
     /* If it is already been done on request of another CPU, just retry. */
     if (tb_ctx.tb_flush_count != tb_flush_count.host_int) {
-        goto done;
+        goto done; // 其他核有更新，就不需要flush了
     }
     did_flush = true;
 
-    CPU_FOREACH(cpu) {
+    CPU_FOREACH(cpu) { // 清除所有CPU的快表 所有CPU？
         tcg_flush_jmp_cache(cpu);
     }
+    // CODE_GEN_HTABLE_SIZE是期望tb总容量 CODE_GEN_HTABLE_SIZE = (1 << 15);
+    // 如果tb_ctx.htable.map的n_bucket有变化，即之前有过扩容，那么此时会创建新的qht_map *new，并开辟初始大小的空间
+    // 清空tb_ctx.htable所有的bucket中的tb指针，如果扩容过，那么tb_ctx.htable.map = new-还原大小
+    qht_reset_size(&tb_ctx.htable, CODE_GEN_HTABLE_SIZE); 
+    tb_remove_all(); // 清空guest区域树结构
 
-    qht_reset_size(&tb_ctx.htable, CODE_GEN_HTABLE_SIZE);
-    tb_remove_all();
-
-    tcg_region_reset_all();
+    tcg_region_reset_all(); // 重置code buffer - host区域树
     /* XXX: flush processor icache at this point if cache flush is expensive */
-    qatomic_inc(&tb_ctx.tb_flush_count);
+    qatomic_inc(&tb_ctx.tb_flush_count); // 增加TB flush版本号
 
 done:
     mmap_unlock();
@@ -788,14 +790,14 @@ done:
         qemu_plugin_flush_cb();
     }
 }
-
+// 整体刷新Translation Block系统，是全局失效机制
 void tb_flush(CPUState *cpu)
 {
-    if (tcg_enabled()) {
-        unsigned tb_flush_count = qatomic_read(&tb_ctx.tb_flush_count);
+    if (tcg_enabled()) { // tcg模式
+        unsigned tb_flush_count = qatomic_read(&tb_ctx.tb_flush_count); // tb_flush_count-主表全局tb刷新次数，用于避免多核环境重复刷新tb
 
         if (cpu_in_serial_context(cpu)) {
-            do_tb_flush(cpu, RUN_ON_CPU_HOST_INT(tb_flush_count));
+            do_tb_flush(cpu, RUN_ON_CPU_HOST_INT(tb_flush_count)); // 核心
         } else {
             async_safe_run_on_cpu(cpu, do_tb_flush,
                                   RUN_ON_CPU_HOST_INT(tb_flush_count));
@@ -883,7 +885,7 @@ static void tb_jmp_cache_inval_tb(TranslationBlock *tb)
 {
     CPUState *cpu;
 
-    if (tb_cflags(tb) & CF_PCREL) {
+    if (tb_cflags(tb) & CF_PCREL) { // 使用了PC-relative位置无关编码，可能会放在任意位置->无法准确反推tb快表槽
         /* A TB may be at any virtual address */
         CPU_FOREACH(cpu) {
             tcg_flush_jmp_cache(cpu);
@@ -906,6 +908,7 @@ static void tb_jmp_cache_inval_tb(TranslationBlock *tb)
  * In !user-mode, if @rm_from_page_list is set, call with the TB's pages'
  * locks held.
  */
+// 某个tb失效时，需要在三张表中清除
 static void do_tb_phys_invalidate(TranslationBlock *tb, bool rm_from_page_list)
 {
     uint32_t h;
@@ -916,24 +919,24 @@ static void do_tb_phys_invalidate(TranslationBlock *tb, bool rm_from_page_list)
 
     /* make sure no further incoming jumps will be chained to this TB */
     qemu_spin_lock(&tb->jmp_lock);
-    qatomic_set(&tb->cflags, tb->cflags | CF_INVALID);
+    qatomic_set(&tb->cflags, tb->cflags | CF_INVALID); // 标记当前tb不可用
     qemu_spin_unlock(&tb->jmp_lock);
 
     /* remove the TB from the hash list */
     phys_pc = tb_page_addr0(tb);
     h = tb_hash_func(phys_pc, (orig_cflags & CF_PCREL ? 0 : tb->pc),
-                     tb->flags, tb->cs_base, orig_cflags);
-    if (!qht_remove(&tb_ctx.htable, tb, h)) {
-        return;
+                     tb->flags, tb->cs_base, orig_cflags); // 计算主表hash
+    if (!qht_remove(&tb_ctx.htable, tb, h)) { // 从主表中删除该tb
+        return; // 主表中没找到->重复失效-退出
     }
 
     /* remove the TB from the page list */
     if (rm_from_page_list) {
-        tb_remove(tb);
+        tb_remove(tb); // 从guest区域树中删除
     }
 
     /* remove the TB from the hash list */
-    tb_jmp_cache_inval_tb(tb);
+    tb_jmp_cache_inval_tb(tb); // 从快表中删除
 
     /* suppress this TB from the two jump lists */
     tb_remove_from_jmp_list(tb, 0);
@@ -985,22 +988,21 @@ TranslationBlock *tb_link_page(TranslationBlock *tb)
     assert_memory_lock();
     tcg_debug_assert(!(tb->cflags & CF_INVALID));
 
-    tb_record(tb);
+    tb_record(tb); // 将tb插入guest区域树
 
     /* add in the hash table */
     h = tb_hash_func(tb_page_addr0(tb), (tb->cflags & CF_PCREL ? 0 : tb->pc),
-                     tb->flags, tb->cs_base, tb->cflags);
-    qht_insert(&tb_ctx.htable, tb, h, &existing_tb);
-
+                     tb->flags, tb->cs_base, tb->cflags); // 计算主表哈希值
+    qht_insert(&tb_ctx.htable, tb, h, &existing_tb); // 插入主表，如果插入满了需要扩容/重排，如果已经存在返回已经存在的tb
     /* remove TB from the page(s) if we couldn't insert it */
     if (unlikely(existing_tb)) {
-        tb_remove(tb);
+        tb_remove(tb); // 如果存在，那么需要在guest区域树中清除当前tb，该tb开辟的空间是没有用的，所以需要清除
         tb_unlock_pages(tb);
-        return existing_tb;
+        return existing_tb; // 返回已存在tb
     }
 
     tb_unlock_pages(tb);
-    return tb;
+    return tb; // 成功插入，返回tb
 }
 
 #ifdef CONFIG_USER_ONLY

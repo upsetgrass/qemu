@@ -27,7 +27,7 @@
 
 #define TCG_TARGET_INSN_UNIT_SIZE 4
 #define TCG_TARGET_NB_REGS 64
-#define MAX_CODE_GEN_BUFFER_SIZE  ((size_t)-1)
+#define MAX_CODE_GEN_BUFFER_SIZE  ((size_t)-1) // -1转换成无符号类型，0xFFFFFFFFFFFFFFFF/0xFFFFFFFF
 
 typedef enum {
     TCG_REG_ZERO, TCG_REG_RA,  TCG_REG_SP,  TCG_REG_GP,

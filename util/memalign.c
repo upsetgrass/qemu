@@ -67,7 +67,7 @@ void *qemu_try_memalign(size_t alignment, size_t size)
     trace_qemu_memalign(alignment, size, ptr);
     return ptr;
 }
-
+// 分配一块按照alignment对齐的内存，返回的地址是alignment的整数倍
 void *qemu_memalign(size_t alignment, size_t size)
 {
     void *p = qemu_try_memalign(alignment, size);

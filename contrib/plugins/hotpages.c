@@ -96,7 +96,7 @@ static void plugin_exit(qemu_plugin_id_t id, void *p)
         }
         g_list_free(it);
     }
-
+    
     qemu_plugin_outs(report->str);
 }
 
@@ -122,7 +122,7 @@ static void vcpu_haddr(unsigned int cpu_index, qemu_plugin_meminfo_t meminfo,
         }
     } else {
         if (hwaddr && !qemu_plugin_hwaddr_is_io(hwaddr)) {
-            page = (uint64_t) qemu_plugin_hwaddr_phys_addr(hwaddr);
+            page = (uint64_t) qemu_plugin_hwaddr_phys_addr(hwaddr); // 物理页地址
         } else {
             page = vaddr;
         }
@@ -137,6 +137,9 @@ static void vcpu_haddr(unsigned int cpu_index, qemu_plugin_meminfo_t meminfo,
         count->page_address = page;
         g_hash_table_insert(pages, &count->page_address, count);
     }
+    // cpu编号右移动 - bitmask来表示哪个CPU正在访问，可以复合表示
+    // count->cpu_write = 0x0001 cpu0正在写  count->cpu_write = 0x000c cpu3和cpu2正在写
+    // 四核共享-0x000f
     if (qemu_plugin_mem_is_store(meminfo)) {
         count->writes++;
         count->cpu_write |= (1 << cpu_index);
@@ -152,7 +155,7 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
 {
     size_t n = qemu_plugin_tb_n_insns(tb);
     size_t i;
-
+    // 处理每一条tcg IR
     for (i = 0; i < n; i++) {
         struct qemu_plugin_insn *insn = qemu_plugin_tb_get_insn(tb, i);
         qemu_plugin_register_vcpu_mem_cb(insn, vcpu_haddr,

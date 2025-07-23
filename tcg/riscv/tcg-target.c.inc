@@ -577,7 +577,7 @@ static int32_t encode_vseti(RISCVInsn opc, TCGReg rd,
 static void tcg_out_opc_reg(TCGContext *s, RISCVInsn opc,
                             TCGReg rd, TCGReg rs1, TCGReg rs2)
 {
-    tcg_out32(s, encode_r(opc, rd, rs1, rs2));
+    tcg_out32(s, encode_r(opc, rd, rs1, rs2)); //
 }
 
 static void tcg_out_opc_imm(TCGContext *s, RISCVInsn opc,

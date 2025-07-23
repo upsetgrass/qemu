@@ -200,14 +200,14 @@ q_tree_new_full(GCompareDataFunc key_compare_func,
 
     g_return_val_if_fail(key_compare_func != NULL, NULL);
 
-    tree = g_new(QTree, 1);
-    tree->root               = NULL;
-    tree->key_compare        = key_compare_func;
-    tree->key_destroy_func   = key_destroy_func;
-    tree->value_destroy_func = value_destroy_func;
-    tree->key_compare_data   = key_compare_data;
-    tree->nnodes             = 0;
-    tree->ref_count          = 1;
+    tree = g_new(QTree, 1); // 构造一个region_tree结构体
+    tree->root               = NULL; // 初始化
+    tree->key_compare        = key_compare_func; // 外部提供key的比较函数
+    tree->key_destroy_func   = key_destroy_func; // 外部提供销毁key函数，这里为NULL
+    tree->value_destroy_func = value_destroy_func; // 外部提供销毁value函数
+    tree->key_compare_data   = key_compare_data; // NULL
+    tree->nnodes             = 0; // 节点数量
+    tree->ref_count          = 1; // 引用计数 ？？？
 
     return tree;
 }
@@ -459,9 +459,9 @@ q_tree_insert_node(QTree    *tree,
 
 /**
  * q_tree_insert:
- * @tree: a #QTree
- * @key: the key to insert
- * @value: the value corresponding to the key
+ * @tree: a #QTree  --------> rt->tree
+ * @key: the key to insert ------->&tb->tc
+ * @value: the value corresponding to the key --------->tb
  *
  * Inserts a key/value pair into a #QTree.
  *
@@ -545,7 +545,7 @@ q_tree_insert_internal(QTree    *tree,
     g_return_val_if_fail(tree != NULL, NULL);
 
     if (!tree->root) {
-        tree->root = q_tree_node_new(key, value);
+        tree->root = q_tree_node_new(key, value); // 存到这颗红黑树的时候tb作为value
         tree->nnodes++;
         return tree->root;
     }
@@ -555,6 +555,7 @@ q_tree_insert_internal(QTree    *tree,
     node = tree->root;
 
     while (1) {
+         // 这里就是调用的region.c中的tb_tc_cmp，通过比较当前key.ptr和树中node的key.ptr
         int cmp = tree->key_compare(key, node->key, tree->key_compare_data);
 
         if (cmp == 0) {
@@ -1197,7 +1198,7 @@ q_tree_find_node(QTree        *tree,
     while (1) {
         cmp = tree->key_compare(key, node->key, tree->key_compare_data);
         if (cmp == 0) {
-            return node;
+            return node; // 找到
         } else if (cmp < 0) {
             if (!node->left_child) {
                 return NULL;

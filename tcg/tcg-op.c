@@ -53,13 +53,13 @@ TCGOp * NI tcg_gen_op2(TCGOpcode opc, TCGType type, TCGArg a1, TCGArg a2)
     op->args[1] = a2;
     return op;
 }
-
+// 将操作变成一条TCGOp记录下来，这个TCGOp就是TCG IR，和guest指令语义等价
 TCGOp * NI tcg_gen_op3(TCGOpcode opc, TCGType type, TCGArg a1,
                        TCGArg a2, TCGArg a3)
 {
-    TCGOp *op = tcg_emit_op(opc, 3);
-    TCGOP_TYPE(op) = type;
-    op->args[0] = a1;
+    TCGOp *op = tcg_emit_op(opc, 3); // 调用tcg_gen_op3时，会在IR buffer中插入一条新的中间指令
+    TCGOP_TYPE(op) = type;                 // 上述过程就是tcg_emit_op函数中做的，并且会把这条TCGOp保存在tcg_ctx->ops双向链表中
+    op->args[0] = a1;                      // tcg_ctx全局变量-TCGContext类型，tcg_ctx->ops就是TCG IR序列 
     op->args[1] = a2;
     op->args[2] = a3;
     return op;
@@ -145,7 +145,7 @@ static void DNI tcg_gen_op3_i32(TCGOpcode opc, TCGv_i32 a1,
     tcg_gen_op3(opc, TCG_TYPE_I32, tcgv_i32_arg(a1),
                 tcgv_i32_arg(a2), tcgv_i32_arg(a3));
 }
-
+// 封装，tcg_gen_op3
 static void DNI tcg_gen_op3_i64(TCGOpcode opc, TCGv_i64 a1,
                                 TCGv_i64 a2, TCGv_i64 a3)
 {
@@ -1630,7 +1630,7 @@ void tcg_gen_st_i64(TCGv_i64 arg1, TCGv_ptr arg2, tcg_target_long offset)
         tcg_gen_st_i32(TCGV_HIGH(arg1), arg2, offset + 4);
     }
 }
-
+// 把ret = arg1 + arg2翻译成一个TCG 三操作数IR指令 add_i64 ret, arg1, arg2，这里比如进入tcg_gen_op3_i64
 void tcg_gen_add_i64(TCGv_i64 ret, TCGv_i64 arg1, TCGv_i64 arg2)
 {
     if (TCG_TARGET_REG_BITS == 64) {
@@ -1734,13 +1734,13 @@ void tcg_gen_mul_i64(TCGv_i64 ret, TCGv_i64 arg1, TCGv_i64 arg2)
     tcg_temp_free_i64(t0);
     tcg_temp_free_i32(t1);
 }
-
+// 根据立即数的不同情况，生成不同的TCG IR 生成ret = arg1 + arg2  arg2是立即数
 void tcg_gen_addi_i64(TCGv_i64 ret, TCGv_i64 arg1, int64_t arg2)
 {
     /* some cases can be optimized here */
-    if (arg2 == 0) {
+    if (arg2 == 0) {// 优化-如果没有加法，那么直接mov
         tcg_gen_mov_i64(ret, arg1);
-    } else if (TCG_TARGET_REG_BITS == 64) {
+    } else if (TCG_TARGET_REG_BITS == 64) {// 宿主是x64，先用tcg_constant_i64创建立即数临时寄存器表示arg2，然后调用tcg_gen_add_i64
         tcg_gen_add_i64(ret, arg1, tcg_constant_i64(arg2));
     } else {
         tcg_gen_add2_i32(TCGV_LOW(ret), TCGV_HIGH(ret),
