@@ -129,7 +129,8 @@ void translator_loop(CPUState *cpu, TranslationBlock *tb, int *max_insns,
     TCGOp *first_insn_start = NULL;
     bool plugin_enabled;
 
-    /* Initialize DisasContext */
+    /* Initialize DisasContext */ 
+    // 初始化翻译上下文，这个上下文是局部的，起始PC、最大翻译条数、TB指针...
     db->tb = tb;
     db->pc_first = pc;
     db->pc_next = pc;
@@ -142,21 +143,22 @@ void translator_loop(CPUState *cpu, TranslationBlock *tb, int *max_insns,
     db->host_addr[1] = NULL;
     db->record_start = 0;
     db->record_len = 0;
-
+    // 架构相关初始化，这里的ops也是多态，比如目标是riscv那么就在target/riscv/translate.c的TranslatorOps riscv_tr_ops
     ops->init_disas_context(db, cpu);
     tcg_debug_assert(db->is_jmp == DISAS_NEXT);  /* no early exit */
 
     /* Start translating.  */
-    icount_start_insn = gen_tb_start(db, cflags);
-    ops->tb_start(db, cpu);
+    icount_start_insn = gen_tb_start(db, cflags); // 首条IR指令，用于辅助 性能计数器（instruction count）和 TB 追踪
+    ops->tb_start(db, cpu); // 架构相关前置工作，比如保存寄存器状态到本地变量
     tcg_debug_assert(db->is_jmp == DISAS_NEXT);  /* no early exit */
 
     plugin_enabled = plugin_gen_tb_start(cpu, db);
     db->plugin_enabled = plugin_enabled;
-
+    // qemu每条IR前后都留有hook点（预留执行位置），供profiling性能剖析插件介入
+    // while的每一轮就是处理一条guest程序
     while (true) {
         *max_insns = ++db->num_insns;
-        ops->insn_start(db, cpu);
+        ops->insn_start(db, cpu); // 记录当前guest PC，用于异常或回溯
         db->insn_start = tcg_last_op();
         if (first_insn_start == NULL) {
             first_insn_start = db->insn_start;
@@ -164,7 +166,7 @@ void translator_loop(CPUState *cpu, TranslationBlock *tb, int *max_insns,
         tcg_debug_assert(db->is_jmp == DISAS_NEXT);  /* no early exit */
 
         if (plugin_enabled) {
-            plugin_gen_insn_start(cpu, db);
+            plugin_gen_insn_start(cpu, db); // 插桩前后对称
         }
 
         /*
@@ -173,7 +175,7 @@ void translator_loop(CPUState *cpu, TranslationBlock *tb, int *max_insns,
          * done next -- either exiting this loop or locate the start of
          * the next instruction.
          */
-        ops->translate_insn(db, cpu);
+        ops->translate_insn(db, cpu); // 实际处理一条指令的函数 target/riscv/translate.c:riscv_tr_translate_insn
 
         /*
          * We can't instrument after instructions that change control

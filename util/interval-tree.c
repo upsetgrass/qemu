@@ -344,7 +344,7 @@ static void rb_insert_augmented_cached(RBNode *node,
     }
     rb_insert_augmented(node, &root->rb_root, augment);
 }
-
+// rebalance 删除节点后需要通过旋转和染色保持红黑树性质
 static void rb_erase_color(RBNode *parent, RBRoot *root,
                            const RBAugmentCallbacks *augment)
 {
@@ -720,9 +720,9 @@ void interval_tree_insert(IntervalTreeNode *node, IntervalTreeRoot *root)
         parent = rb_to_itree(rb_parent);
 
         if (parent->subtree_last < last) {
-            parent->subtree_last = last;
+            parent->subtree_last = last; // 更新subtree_last值
         }
-        if (start < parent->start) {
+        if (start < parent->start) { // start作为insert判断
             link = &parent->rb.rb_left;
         } else {
             link = &parent->rb.rb_right;
@@ -791,7 +791,7 @@ static IntervalTreeNode *interval_tree_subtree_search(IntervalTreeNode *node,
         return NULL; /* no match */
     }
 }
-
+// 查找第一个重叠
 IntervalTreeNode *interval_tree_iter_first(IntervalTreeRoot *root,
                                            uint64_t start, uint64_t last)
 {
@@ -826,7 +826,7 @@ IntervalTreeNode *interval_tree_iter_first(IntervalTreeRoot *root,
 
     return interval_tree_subtree_search(node, start, last);
 }
-
+// 查找后续重叠
 IntervalTreeNode *interval_tree_iter_next(IntervalTreeNode *node,
                                           uint64_t start, uint64_t last)
 {

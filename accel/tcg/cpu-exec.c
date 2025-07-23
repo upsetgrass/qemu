@@ -156,7 +156,7 @@ struct tb_desc {
     uint32_t cflags;
 };
 
-static bool tb_lookup_cmp(const void *p, const void *d)
+static bool tb_lookup_cmp(const void *p, const void *d) // p-TB指针  d-desc描述符
 {
     const TranslationBlock *tb = p;
     const struct tb_desc *desc = d;
@@ -200,20 +200,24 @@ static TranslationBlock *tb_htable_lookup(CPUState *cpu, vaddr pc,
     tb_page_addr_t phys_pc;
     struct tb_desc desc;
     uint32_t h;
-
+    
+    // 构造查找描述符desc
     desc.env = cpu_env(cpu);
     desc.cs_base = cs_base;
     desc.flags = flags;
     desc.cflags = cflags;
     desc.pc = pc;
+    // 获取物理页地址
     phys_pc = get_page_addr_code(desc.env, pc);
     if (phys_pc == -1) {
         return NULL;
     }
     desc.page_addr0 = phys_pc;
+    // 计算哈希值
     h = tb_hash_func(phys_pc, (cflags & CF_PCREL ? 0 : pc),
                      flags, cs_base, cflags);
-    return qht_lookup_custom(&tb_ctx.htable, &desc, h, tb_lookup_cmp);
+    // 调用哈希表（tb_ctx.htable）查询
+    return qht_lookup_custom(&tb_ctx.htable, &desc, h, tb_lookup_cmp); 
 }
 
 /**
@@ -258,8 +262,8 @@ static inline TranslationBlock *tb_lookup(CPUState *cpu, vaddr pc,
     if (tb == NULL) {
         return NULL;
     }
-     
-    // 快路径cache，写入pc
+
+    // 能够走到这里，说明命中了主哈希表中的TB，此时把tb写入快表中
     jc->array[hash].pc = pc;
     qatomic_set(&jc->array[hash].tb, tb);
 
@@ -445,13 +449,13 @@ cpu_tb_exec(CPUState *cpu, TranslationBlock *itb, int *tb_exit)
     uintptr_t ret;
     TranslationBlock *last_tb;
     const void *tb_ptr = itb->tc.ptr;
-
+    // 日志打印
     if (qemu_loglevel_mask(CPU_LOG_TB_CPU | CPU_LOG_EXEC)) {
         log_cpu_exec(log_pc(cpu, itb), cpu, itb);
     }
 
     qemu_thread_jit_execute();
-    ret = tcg_qemu_tb_exec(cpu_env(cpu), tb_ptr);
+    ret = tcg_qemu_tb_exec(cpu_env(cpu), tb_ptr); // 实际执行host机器代码-跳转到tb_ptr指向的host代码地址进行执行
     cpu->neg.can_do_io = true;
     qemu_plugin_disable_mem_helpers(cpu);
     /*
@@ -901,8 +905,8 @@ static inline void cpu_loop_exec_tb(CPUState *cpu, TranslationBlock *tb,
                                     vaddr pc, TranslationBlock **last_tb,
                                     int *tb_exit)
 {
-    trace_exec_tb(tb, pc);
-    tb = cpu_tb_exec(cpu, tb, tb_exit);
+    trace_exec_tb(tb, pc); // 跟踪-日志、调试
+    tb = cpu_tb_exec(cpu, tb, tb_exit); // 实际执行tb，返回执行后的tb
     if (*tb_exit != TB_EXIT_REQUESTED) {
         *last_tb = tb;
         return;
@@ -984,24 +988,31 @@ cpu_exec_loop(CPUState *cpu, SyncClocks *sc)
                 break;
             }
 
-            // 从TB缓存中查找已有翻译块的函数
+            // 从TB快速哈希表和主哈希表中查找当前guest指令流是否已经被翻译并存储到快速哈希表/主哈希表
             tb = tb_lookup(cpu, pc, cs_base, flags, cflags);
             if (tb == NULL) {
+                // tb为null说明未被翻译并存储到哈希表/主表中，所以需要翻译
                 CPUJumpCache *jc;
                 uint32_t h;
 
                 mmap_lock();
-                tb = tb_gen_code(cpu, pc, cs_base, flags, cflags); // IR->TB???
+                tb = tb_gen_code(cpu, pc, cs_base, flags, cflags);// 翻译好后的tb
                 mmap_unlock();
 
                 /*
                  * We add the TB in the virtual pc hash table
                  * for the fast lookup
                  */
-                h = tb_jmp_cache_hash_func(pc); // 将这里处理过的放到cache中
+                // 翻译后写入快表中
+                h = tb_jmp_cache_hash_func(pc);
                 jc = cpu->tb_jmp_cache;
                 jc->array[h].pc = pc;
                 qatomic_set(&jc->array[h].tb, tb);
+
+                // 关于写入CPUJumpCache表(jc)，两处会写 
+                // 1）tb_lookup中在主表识别到以后，会将识别tb存入jc表 
+                // 2）tb_gen_code翻译之后，会将翻译tb存入jc表
+                // 这两处写入jc快表，都代表最近使用过、翻译过的指令流，更可能是热路径-时间局限性的优化策略
             }
 
 #ifndef CONFIG_USER_ONLY
@@ -1016,12 +1027,15 @@ cpu_exec_loop(CPUState *cpu, SyncClocks *sc)
             }
 #endif
             /* See if we can patch the calling TB. */
-            if (last_tb) { // last_tb-上一次的TB，能调到当前的TB，patch跳转表（内存槽）
+            if (last_tb) { 
+                // 将上一个翻译块与当前的翻译块之间建立直接跳转关系（patch last_tb跳转表 - 加一条host jmp指令）这里是host代码之间的直跳，可以避免一次查找tb的过程
+                // 之后执行last_tb时直接跳转执行tb，而不需要再走一遍lookup-判断是否需要翻译生成
                 tb_add_jump(last_tb, tb_exit, tb);
             }
 
-            // 核心代码，执行TB，内部会调用TCG生成的代码，tb_exit会返回退出原因（跳转、异常、breakpoint...）
-            cpu_loop_exec_tb(cpu, tb, pc, &last_tb, &tb_exit); 
+            // 执行本次（翻译/查找）生成的TB，内部会调用TCG生成的代码，tb_exit会返回退出原因（跳转、异常、breakpoint...）
+            // last_tb是本次执行后最后一个tb（可能一次性会执行几个tb-直跳优化）
+            cpu_loop_exec_tb(cpu, tb, pc, &last_tb, &tb_exit);
 
             /* Try to align the host and virtual clocks
                if the guest is in advance */
@@ -1034,6 +1048,7 @@ cpu_exec_loop(CPUState *cpu, SyncClocks *sc)
 static int cpu_exec_setjmp(CPUState *cpu, SyncClocks *sc)
 {
     /* Prepare setjmp context for exception handling. */
+    // 非局部跳转-sigsetjmp/siglongjmp
     if (unlikely(sigsetjmp(cpu->jmp_env, 0) != 0)) {
         cpu_exec_longjmp_cleanup(cpu); // 异常跳转后的 cleanup 处理逻辑
     }
@@ -1069,7 +1084,7 @@ int cpu_exec(CPUState *cpu)
     cpu_exec_exit(cpu);
     return ret;
 }
-
+// 初始化TCG执行引擎资源
 bool tcg_exec_realizefn(CPUState *cpu, Error **errp)
 {
     static bool tcg_target_initialized;
@@ -1086,7 +1101,7 @@ bool tcg_exec_realizefn(CPUState *cpu, Error **errp)
         tcg_target_initialized = true;
     }
 
-    cpu->tb_jmp_cache = g_new0(CPUJumpCache, 1);
+    cpu->tb_jmp_cache = g_new0(CPUJumpCache, 1);           // 分配并清空一个CPUJumpCache结构体
     tlb_init(cpu);
 #ifndef CONFIG_USER_ONLY
     tcg_iommu_init_notifier_list(cpu);
@@ -1104,5 +1119,5 @@ void tcg_exec_unrealizefn(CPUState *cpu)
 #endif /* !CONFIG_USER_ONLY */
 
     tlb_destroy(cpu);
-    g_free_rcu(cpu->tb_jmp_cache, rcu);
+    g_free_rcu(cpu->tb_jmp_cache, rcu); // 延迟释放jmp_cache
 }

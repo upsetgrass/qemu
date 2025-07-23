@@ -2618,10 +2618,10 @@ static inline void cpu_get_tb_cpu_state(CPUX86State *env, vaddr *pc,
     *flags = env->hflags |
         (env->eflags & (IOPL_MASK | TF_MASK | RF_MASK | VM_MASK | AC_MASK));
     if (env->hflags & HF_CS64_MASK) {
-        *cs_base = 0;
+        *cs_base = 0; // 长模式-64位模式
         *pc = env->eip;
     } else {
-        *cs_base = env->segs[R_CS].base;
+        *cs_base = env->segs[R_CS].base; // 非64位模式- 1）32位保护  2）虚拟8086  3）实模式
         *pc = (uint32_t)(*cs_base + env->eip);
     }
 }

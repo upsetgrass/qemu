@@ -70,7 +70,7 @@ void cpu_loop_exit(CPUState *cpu)
     cpu->neg.can_do_io = true;
     /* Undo any setting in generated code.  */
     qemu_plugin_disable_mem_helpers(cpu);
-    siglongjmp(cpu->jmp_env, 1);
+    siglongjmp(cpu->jmp_env, 1); // 类似goto一样调到主循环的某个处理分支
 }
 
 void cpu_loop_exit_restore(CPUState *cpu, uintptr_t pc)

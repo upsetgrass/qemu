@@ -27,14 +27,14 @@
 #define CODE_GEN_HTABLE_SIZE     (1 << CODE_GEN_HTABLE_BITS)
 
 typedef struct TBContext TBContext;
-
+// 全局TB管理器
 struct TBContext {
 
-    struct qht htable;
+    struct qht htable; // TB哈希表
 
     /* statistics */
-    unsigned tb_flush_count;
-    unsigned tb_phys_invalidate_count;
+    unsigned tb_flush_count; // 整张主表的清空次数（内存失效memory invalidate）- 每次调用tb_flush()时递增
+    unsigned tb_phys_invalidate_count; // 物理地址失效导致的局部区域TB的失效次数 - 每次调用tb_phys_invalidate()... 时递增
 };
 
 extern TBContext tb_ctx;

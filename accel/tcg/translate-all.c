@@ -268,25 +268,33 @@ static int setjmp_gen_code(CPUArchState *env, TranslationBlock *tb,
                            vaddr pc, void *host_pc,
                            int *max_insns, int64_t *ti)
 {
-    int ret = sigsetjmp(tcg_ctx->jmp_trans, 0);
+    int ret = sigsetjmp(tcg_ctx->jmp_trans, 0);// 错误返回点，ret是返回值给到ret，也就是-1 -2 -3这三种
     if (unlikely(ret != 0)) {
         return ret;
     }
 
-    tcg_func_start(tcg_ctx);
-
+    tcg_func_start(tcg_ctx); // 每次对TCG翻译器进行一次新的TB翻译之前，对tcg_ctx全局上下文进行清理，保证本次翻译从一个干净的状态开始
     CPUState *cs = env_cpu(env);
     tcg_ctx->cpu = cs;
-    cs->cc->tcg_ops->translate_code(cs, tb, max_insns, pc, host_pc);
+    // tcg_ops-目标架构tcg操作集，其中的translate_code用于逐条解码目标指令
+    // tcg/tcg-op.c:tcg_gen_op3最终在这里面将生成对应的TCG中间代码IR-放在tcg_ctx->ops
+    cs->cc->tcg_ops->translate_code(cs, tb, max_insns, pc, host_pc); // target/riscv/tcg/tcg-cpu.c:riscv_tcg_ops.riscv_translate_code
+    // void riscv_translate_code(CPUState *cs, TranslationBlock *tb,
+    //     int *max_insns, vaddr pc, void *host_pc)
 
     assert(tb->size != 0);
-    tcg_ctx->cpu = NULL;
-    *max_insns = tb->icount;
+    tcg_ctx->cpu = NULL; // 清理cpu绑定
+    *max_insns = tb->icount; // 实际翻译的指令数会更新到max_insns
 
-    return tcg_gen_code(tcg_ctx, tb, pc);
+    return tcg_gen_code(tcg_ctx, tb, pc); // 将TCG IR转成host机器码
 }
 
 /* Called with mmap_lock held for user mode emulation.  */
+// 1、初始化TB和翻译上下文
+// 2、执行 TCG-IR 翻译过程（guest code -> TCG IR）
+// 3、优化并生成本地代码（TCG IR -> host code）
+// 4、注册并发布翻译块TB
+// 5、打印翻译日志
 TranslationBlock *tb_gen_code(CPUState *cpu,
                               vaddr pc, uint64_t cs_base,
                               uint32_t flags, int cflags)
@@ -294,22 +302,23 @@ TranslationBlock *tb_gen_code(CPUState *cpu,
     CPUArchState *env = cpu_env(cpu);
     TranslationBlock *tb, *existing_tb;
     tb_page_addr_t phys_pc, phys_p2;
-    tcg_insn_unit *gen_code_buf;
+    tcg_insn_unit *gen_code_buf; // 这里的insn是Instruction
     int gen_code_size, search_size, max_insns;
     int64_t ti;
     void *host_pc;
 
     assert_memory_lock();
     qemu_thread_jit_write();
-
+    // 获取当前PC所在页的物理地址phys_pc和host_pc并检查是否为特殊区域
     phys_pc = get_page_addr_code_hostp(env, pc, &host_pc);
-
     if (phys_pc == -1) {
         /* Generate a one-shot TB with 1 insn in it */
+        // MMIO/I/O特殊区域时，只翻译一条指令
         cflags = (cflags & ~CF_COUNT_MASK) | 1;
     }
 
-    max_insns = cflags & CF_COUNT_MASK;
+    // 最大翻译指令数设置
+    max_insns = cflags & CF_COUNT_MASK; // 从cflags中提取
     if (max_insns == 0) {
         max_insns = TCG_MAX_INSNS;
     }
@@ -317,8 +326,11 @@ TranslationBlock *tb_gen_code(CPUState *cpu,
 
  buffer_overflow:
     assert_no_pages_locked();
-    tb = tcg_tb_alloc(tcg_ctx);
+    
+    // tb空间分配和初始化，包括pc、cs_base、flags、cflags...
+    tb = tcg_tb_alloc(tcg_ctx); // context
     if (unlikely(!tb)) {
+        // 返回NULL，说明TB内存池已满，需要tb_flush清除所有TB缓存，然后跳出执行循环，用siglongjmp/sigsetjmp这一套实现非局部跳转
         /* flush must be done */
         tb_flush(cpu);
         mmap_unlock();
@@ -327,41 +339,48 @@ TranslationBlock *tb_gen_code(CPUState *cpu,
         cpu_loop_exit(cpu);
     }
 
-    gen_code_buf = tcg_ctx->code_gen_ptr;
+    // 初始化TB
+    // code_gen_ptr是全局的,当前 TB 在全局 code buffer 中的起始位置
+    gen_code_buf = tcg_ctx->code_gen_ptr; // gen_code_buf是指向tcg代码生成缓冲区的当前位置tcg_insn_unit*，存放翻译生成的host代码
+    //  写与执行分离机制-gen_code_buf位于可写内存区域，将其通过tcg_splitwx_to_rx转换成可执行的地址，使CPU能够运行这段代码（W^X安全策略）
     tb->tc.ptr = tcg_splitwx_to_rx(gen_code_buf);
     if (!(cflags & CF_PCREL)) {
         tb->pc = pc;
     }
     tb->cs_base = cs_base;
-    tb->flags = flags;
-    tb->cflags = cflags;
-    tb_set_page_addr0(tb, phys_pc);
+    tb->flags = flags;  // CPU状态（特权、浮点模式等...）
+    tb->cflags = cflags;// 翻译行为控制
+    tb_set_page_addr0(tb, phys_pc); // TB关联的第一个物理页地址,tb->page_addr[0] = addr;
     tb_set_page_addr1(tb, -1);
-    if (phys_pc != -1) {
+    if (phys_pc != -1) { // MMIO/I/O区域时phys_pc=-1
         tb_lock_page0(phys_pc);
     }
 
-    tcg_ctx->gen_tb = tb;
-    tcg_ctx->addr_type = TARGET_LONG_BITS == 32 ? TCG_TYPE_I32 : TCG_TYPE_I64;
-#ifdef CONFIG_SOFTMMU
+    // tcg_ctx上下文初始化，本次翻译的tb、目标地址位宽...
+    tcg_ctx->gen_tb = tb; // 翻译过程中使用到的TB元数据pc、flags
+    tcg_ctx->addr_type = TARGET_LONG_BITS == 32 ? TCG_TYPE_I32 : TCG_TYPE_I64; // 设置guest地址是32、64位，目前主流guest都是32/64
+#ifdef CONFIG_SOFTMMU // 软件MMU 
     tcg_ctx->page_bits = TARGET_PAGE_BITS;
     tcg_ctx->page_mask = TARGET_PAGE_MASK;
     tcg_ctx->tlb_dyn_max_bits = CPU_TLB_DYN_MAX_BITS;
 #endif
+    // 设置每条目标指令在TCG中占的起始字数，每条目标指令在TCG中间表示中占用的起始存储单元数量，这个“字”是TCG的逻辑单位
+    // 决定了每条目标指令在翻译时，需要在TCG上下文中预留多少“字”的空间，用于存储元数据
     tcg_ctx->insn_start_words = TARGET_INSN_START_WORDS;
 #ifdef TCG_GUEST_DEFAULT_MO
-    tcg_ctx->guest_mo = TCG_GUEST_DEFAULT_MO;
+    tcg_ctx->guest_mo = TCG_GUEST_DEFAULT_MO;  // 使用目标架构默认的内存序-全屏障、强内存序、弱内存序...
 #else
     tcg_ctx->guest_mo = TCG_MO_ALL;
 #endif
 
  restart_translate:
     trace_translate_block(tb, pc, tb->tc.ptr);
-
+    // host翻译入口-其中guest -> TCG IR , TCG IR -> host
     gen_code_size = setjmp_gen_code(env, tb, pc, host_pc, &max_insns, &ti);
     if (unlikely(gen_code_size < 0)) {
+        // 翻译失败后重试机制
         switch (gen_code_size) {
-        case -1:
+        case -1: // code buffer溢出，调用tb_flush清理
             /*
              * Overflow of code_gen_buffer, or the current slice of it.
              *
@@ -378,7 +397,7 @@ TranslationBlock *tb_gen_code(CPUState *cpu,
             tcg_ctx->gen_tb = NULL;
             goto buffer_overflow;
 
-        case -2:
+        case -2: // TB过大，减少max_insns重试
             /*
              * The code generated for the TranslationBlock is too large.
              * The maximum size allowed by the unwind info is 64k.
@@ -407,7 +426,7 @@ TranslationBlock *tb_gen_code(CPUState *cpu,
             }
             goto restart_translate;
 
-        case -3:
+        case -3: // 页锁顺序冲突，避免死锁，释放重试
             /*
              * We had a page lock ordering problem.  In order to avoid
              * deadlock we had to drop the lock on page0, which means
@@ -436,7 +455,7 @@ TranslationBlock *tb_gen_code(CPUState *cpu,
      * to its first mapping.
      */
     perf_report_code(pc, tb, tcg_splitwx_to_rx(gen_code_buf));
-
+    // 信息记录和日志输出
     if (qemu_loglevel_mask(CPU_LOG_TB_OUT_ASM) &&
         qemu_log_in_addr_range(pc)) {
         FILE *logfile = qemu_log_trylock();
@@ -510,11 +529,13 @@ TranslationBlock *tb_gen_code(CPUState *cpu,
         }
     }
 
+    // 更新code buffer指针
     qatomic_set(&tcg_ctx->code_gen_ptr, (void *)
         ROUND_UP((uintptr_t)gen_code_buf + gen_code_size + search_size,
                  CODE_GEN_ALIGN));
 
     /* init jump list */
+    // 跳转列表初始化
     qemu_spin_init(&tb->jmp_lock);
     tb->jmp_list_head = (uintptr_t)NULL;
     tb->jmp_list_next[0] = (uintptr_t)NULL;
@@ -535,7 +556,7 @@ TranslationBlock *tb_gen_code(CPUState *cpu,
      * through QHT. Otherwise rewinding happened in the TB might fail to
      * lookup itself using host PC.
      */
-    tcg_tb_insert(tb);
+    tcg_tb_insert(tb); // 将tb插入到host区域树
 
     /*
      * If the TB is not associated with a physical RAM page then it must be
@@ -551,6 +572,7 @@ TranslationBlock *tb_gen_code(CPUState *cpu,
      * values. So return early before attempting to link to other TBs or add
      * to the QHT.
      */
+    // 没有物理页说明是一次性TB（MMIO...）one-shot TB，只翻译一条指令，不做链接优化
     if (tb_page_addr0(tb) == -1) {
         assert_no_pages_locked();
         return tb;
@@ -560,29 +582,29 @@ TranslationBlock *tb_gen_code(CPUState *cpu,
      * No explicit memory barrier is required -- tb_link_page() makes the
      * TB visible in a consistent state.
      */
-    existing_tb = tb_link_page(tb);
+    // 当前TB插入到主表（哈希桶）以及插入到guest区域树中
+    existing_tb = tb_link_page(tb); // existing_tb是返回主表中已存在的tb或者成功插入的tb
     assert_no_pages_locked();
-
     /* if the TB already exists, discard what we just translated */
-    if (unlikely(existing_tb != tb)) {
+    if (unlikely(existing_tb != tb)) { // 如果是已存在的tb，此时刚翻译得到的tb和主表中的tb不相同，需要去重和回滚（多线程、自代码修改等情况会出现）
         uintptr_t orig_aligned = (uintptr_t)gen_code_buf;
 
         orig_aligned -= ROUND_UP(sizeof(*tb), qemu_icache_linesize);
         qatomic_set(&tcg_ctx->code_gen_ptr, (void *)orig_aligned);
-        tcg_tb_remove(tb);
+        tcg_tb_remove(tb); // 这里remove就是在host区域树上remove
         return existing_tb;
     }
     return tb;
 }
 
-/* user-mode: call with mmap_lock held */
+/* user-mode: call with mmap_lock held */ // 内存写断点
 void tb_check_watchpoint(CPUState *cpu, uintptr_t retaddr)
 {
     TranslationBlock *tb;
 
     assert_memory_lock();
 
-    tb = tcg_tb_lookup(retaddr);
+    tb = tcg_tb_lookup(retaddr); // 在code buffer区域查找
     if (tb) {
         /* We can use retranslation to find the PC.  */
         cpu_restore_state_from_tb(cpu, tb, retaddr);

@@ -11,8 +11,8 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <glib.h>
-
 #include <qemu-plugin.h>
+
 
 QEMU_PLUGIN_EXPORT int qemu_plugin_version = QEMU_PLUGIN_VERSION;
 
@@ -68,12 +68,14 @@ static Instruction * get_insn_record(const char *disas, uint64_t vaddr, Match *m
         record->disas = g_strdup(disas);
         record->vaddr = vaddr;
         record->match = m;
-
+        
         g_hash_table_insert(match_insn_records, str_hash, record);
 
         g_string_prepend(ts, "Created record for: ");
         g_string_append(ts, "\n");
         qemu_plugin_outs(ts->str);
+        // fprintf(stdout, "%s\n", ts->str);
+        // fflush(stdout);
     }
 
     g_mutex_unlock(&match_hash_lock);
@@ -133,8 +135,10 @@ static void vcpu_insn_matched_exec_before(unsigned int cpu_index, void *udata)
                                cpu_index,
                                match->hits, delta,
                                match->total_delta / match->hits);
-
         qemu_plugin_outs(ts->str);
+        // fprintf(stdout, "%s", ts->str);
+        // fflush(stdout);
+        
     }
 }
 
@@ -212,6 +216,8 @@ static void plugin_exit(qemu_plugin_id_t id, void *p)
                                qemu_plugin_u64_sum(insn_count));
     }
     qemu_plugin_outs(out->str);
+    // fprintf(stdout, "%s", out->str);
+    // fflush(stdout);
     qemu_plugin_scoreboard_free(insn_count.score);
 
     g_mutex_lock(&match_hash_lock);
@@ -225,6 +231,8 @@ static void plugin_exit(qemu_plugin_id_t id, void *p)
 
         g_string_printf(out, "Match: %s, hits %"PRId64"\n", m->match_string, hits);
         qemu_plugin_outs(out->str);
+        // fprintf(stdout, "%s", out->str);
+        // fflush(stdout);
 
         g_hash_table_iter_init(&iter, match_insn_records);
         while (g_hash_table_iter_next(&iter, NULL, (void **)&record)) {
@@ -235,6 +243,8 @@ static void plugin_exit(qemu_plugin_id_t id, void *p)
                                 record->disas,
                                 record->hits);
                 qemu_plugin_outs(out->str);
+                // fprintf(stdout, "%s", out->str);
+                // fflush(stdout);
             }
         }
 
@@ -262,6 +272,7 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
                                            const qemu_info_t *info,
                                            int argc, char **argv)
 {
+    printf("success start plugin!\n");
     matches = g_array_new(false, true, sizeof(Match));
     /* null terminated so 0 is not a special case */
     sizes = g_array_new(true, true, sizeof(unsigned long));
@@ -272,11 +283,13 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
         if (g_strcmp0(tokens[0], "inline") == 0) {
             if (!qemu_plugin_bool_parse(tokens[0], tokens[1], &do_inline)) {
                 fprintf(stderr, "boolean argument parsing failed: %s\n", opt);
+                fflush(stdout);
                 return -1;
             }
         } else if (g_strcmp0(tokens[0], "sizes") == 0) {
             if (!qemu_plugin_bool_parse(tokens[0], tokens[1], &do_size)) {
                 fprintf(stderr, "boolean argument parsing failed: %s\n", opt);
+                fflush(stdout);
                 return -1;
             }
         } else if (g_strcmp0(tokens[0], "match") == 0) {
@@ -284,10 +297,13 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
         } else if (g_strcmp0(tokens[0], "trace") == 0) {
             if (!qemu_plugin_bool_parse(tokens[0], tokens[1], &do_trace)) {
                 fprintf(stderr, "boolean argument parsing failed: %s\n", opt);
+                fflush(stdout);
                 return -1;
             }
         } else {
+            
             fprintf(stderr, "option parsing failed: %s\n", opt);
+            fflush(stdout);
             return -1;
         }
     }

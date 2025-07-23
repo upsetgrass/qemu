@@ -152,7 +152,7 @@ static void tb_jmp_cache_clear_page(CPUState *cpu, vaddr page_addr)
         return;
     }
 
-    i0 = tb_jmp_cache_hash_page(page_addr);
+    i0 = tb_jmp_cache_hash_page(page_addr); // 利用页起始地址得到哈希的映射
     for (i = 0; i < TB_JMP_PAGE_SIZE; i++) {
         qatomic_set(&jc->array[i0 + i].tb, NULL);
     }

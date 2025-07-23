@@ -477,8 +477,9 @@ void QEMU_ERROR("code path is reachable")
  * QEMU_ALIGN_UP for a safer but slower version on arbitrary
  * numbers); works even if d is a smaller type than n.
  */
+//向下对齐到 d 的整数倍
 #ifndef ROUND_DOWN
-#define ROUND_DOWN(n, d) ((n) & -(0 ? (n) : (d)))
+#define ROUND_DOWN(n, d) ((n) & -(0 ? (n) : (d))) 
 #endif
 
 /*
@@ -486,8 +487,9 @@ void QEMU_ERROR("code path is reachable")
  * QEMU_ALIGN_UP for a safer but slower version on arbitrary
  * numbers); works even if d is a smaller type than n.
  */
+// ROUND_UP(tree_size, 0)->ROUND_DOWN(tree_size+0-1,0)
 #ifndef ROUND_UP
-#define ROUND_UP(n, d) ROUND_DOWN((n) + (d) - 1, (d))
+#define ROUND_UP(n, d) ROUND_DOWN((n) + (d) - 1, (d)) 
 #endif
 
 #ifndef DIV_ROUND_UP

@@ -322,7 +322,7 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
      */
     qemu_plugin_register_vcpu_insn_exec_inline_per_vcpu(first_insn,
                                                       QEMU_PLUGIN_INLINE_STORE_U64,
-                                                      end_block, qemu_plugin_insn_vaddr(last_insn));
+                                                      end_block, qemu_plugin_insn_vaddr(last_insn)); // 在执行first_insn的时候，把last_insn写入end_block
     qemu_plugin_register_vcpu_insn_exec_inline_per_vcpu(first_insn,
                                                       QEMU_PLUGIN_INLINE_STORE_U64,
                                                       pc_after_block,

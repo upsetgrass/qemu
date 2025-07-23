@@ -889,7 +889,7 @@ static bool gen_logic(DisasContext *ctx, arg_r *a,
 
     return true;
 }
-
+// 是一个模板函数，根据当前的host的位数有所变化，func是tcg_gen_addi_tl，tcg_gen_addi_tl是一个宏
 static bool gen_arith_imm_fn(DisasContext *ctx, arg_i *a, DisasExtend ext,
                              void (*func)(TCGv, TCGv, target_long),
                              void (*f128)(TCGv, TCGv, TCGv, TCGv, target_long))
@@ -898,8 +898,8 @@ static bool gen_arith_imm_fn(DisasContext *ctx, arg_i *a, DisasExtend ext,
     TCGv src1 = get_gpr(ctx, a->rs1, ext);
 
     if (get_ol(ctx) < MXL_RV128) {
-        func(dest, src1, a->imm);
-        gen_set_gpr(ctx, a->rd, dest);
+        func(dest, src1, a->imm); // 在这里调用,tcg_gen_addi_tl宏，重定向到了qemu/tcg/tcg-op.c:tcg_gen_addi_i64
+        gen_set_gpr(ctx, a->rd, dest); // 将func计算结果dest写入模拟CPU的寄存器a->rd
     } else {
         if (f128 == NULL) {
             return false;
@@ -908,7 +908,7 @@ static bool gen_arith_imm_fn(DisasContext *ctx, arg_i *a, DisasExtend ext,
         TCGv src1h = get_gprh(ctx, a->rs1);
         TCGv desth = dest_gprh(ctx, a->rd);
 
-        f128(dest, desth, src1, src1h, a->imm);
+        f128(dest, desth, src1, src1h, a->imm);// 128位的特殊处理
         gen_set_gpr128(ctx, a->rd, dest, desth);
     }
     return true;
@@ -1224,9 +1224,9 @@ const size_t decoder_table_size = ARRAY_SIZE(decoder_table);
 static void decode_opc(CPURISCVState *env, DisasContext *ctx, uint16_t opcode)
 {
     ctx->virt_inst_excp = false;
-    ctx->cur_insn_len = insn_len(opcode);
+    ctx->cur_insn_len = insn_len(opcode); // 根据16位opcode判断是C指令还是压缩
     /* Check for compressed insn */
-    if (ctx->cur_insn_len == 2) {
+    if (ctx->cur_insn_len == 2) {// Compressed指令-2字节    正常riscv指令-4字节，根据opcode的低两位可判断（insn_len函数）
         ctx->opcode = opcode;
         /*
          * The Zca extension is added as way to refer to instructions in the C
@@ -1243,9 +1243,12 @@ static void decode_opc(CPURISCVState *env, DisasContext *ctx, uint16_t opcode)
                                              ctx->base.pc_next + 2));
         ctx->opcode = opcode32;
 
-        for (guint i = 0; i < ctx->decoders->len; ++i) {
-            riscv_cpu_decode_fn func = g_ptr_array_index(ctx->decoders, i);
-            if (func(ctx, opcode32)) {
+        // 对于标准的4字节，通过遍历函数指针数组，尝试解码并转换某个类型guest指令，如果没有任何函数能够解码，那么说明非法，执行gen_exception_illegal()
+        // 这里qemu的编译系统根据qemu/target/riscv/insn32.decode配置文件自动生成了decode-insn32.c.inc(C语言头文件)
+        // 可以在decode-insn32.c.inc中1839行作为示例，源寄存器-立即数-目标寄存器
+        for (guint i = 0; i < ctx->decoders->len; ++i) { // #include "decode-insn32.c.inc"
+            riscv_cpu_decode_fn func = g_ptr_array_index(ctx->decoders, i); 
+            if (func(ctx, opcode32)) { // build/libqemu-riscv64-linux-user.a.p/decode-insn32.c.inc 
                 return;
             }
         }
@@ -1319,14 +1322,17 @@ static void riscv_tr_insn_start(DisasContextBase *dcbase, CPUState *cpu)
     ctx->insn_start_updated = false;
 }
 
+// 一条机器指令翻译成TCG IR
 static void riscv_tr_translate_insn(DisasContextBase *dcbase, CPUState *cpu)
 {
-    DisasContext *ctx = container_of(dcbase, DisasContext, base);
-    CPURISCVState *env = cpu_env(cpu);
-    uint16_t opcode16 = translator_lduw(env, &ctx->base, ctx->base.pc_next);
+    DisasContext *ctx = container_of(dcbase, DisasContext, base); // riscv特化过的翻译上下文
+    CPURISCVState *env = cpu_env(cpu); // 当前cpu执行状态
+    uint16_t opcode16 = translator_lduw(env, &ctx->base, ctx->base.pc_next); // 从当前pc位置读取16位指令前缀
 
     ctx->ol = ctx->xl;
-    decode_opc(env, ctx, opcode16);
+    // 根据前缀的信息
+    // 在decode_opc中会根据opcode16的情况，调用decode_insn16或decode_insn16，在其中会调用不同的tran_XXX转换不同类型的guest指令为TCG IR
+    decode_opc(env, ctx, opcode16);  // 核心函数
     ctx->base.pc_next += ctx->cur_insn_len;
 
     /*
@@ -1336,7 +1342,7 @@ static void riscv_tr_translate_insn(DisasContextBase *dcbase, CPUState *cpu)
      * code the insn may have emitted will be deleted as dead code following
      * the noreturn exception
      */
-    if (ctx->fcfi_lp_expected) {
+    if (ctx->fcfi_lp_expected) { // 安全检查
         /* Emit after insn_start, i.e. before the op following insn_start. */
         tcg_ctx->emit_before_op = QTAILQ_NEXT(ctx->base.insn_start, link);
         tcg_gen_st_tl(tcg_constant_tl(RISCV_EXCP_SW_CHECK_FCFI_TVAL),
@@ -1347,7 +1353,8 @@ static void riscv_tr_translate_insn(DisasContextBase *dcbase, CPUState *cpu)
         ctx->base.is_jmp = DISAS_NORETURN;
     }
 
-    /* Only the first insn within a TB is allowed to cross a page boundary. */
+    /* Only the first insn within a TB is allowed to cross a page boundary. */ 
+    // 页边界处理（qemu中一个TB只允许其第一条指令跨页），因而当下一条指令跨页，终止TB
     if (ctx->base.is_jmp == DISAS_NEXT) {
         if (ctx->itrigger || !translator_is_same_page(&ctx->base, ctx->base.pc_next)) {
             ctx->base.is_jmp = DISAS_TOO_MANY;

@@ -1,0 +1,4 @@
+runging on x86_64, smp_vcpus=0, mode=user-mode
+vcpu_num=1
+static_counter:12405
+dynamoic_counter:1765789

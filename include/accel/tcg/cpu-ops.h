@@ -17,6 +17,8 @@
 #include "exec/mmu-access-type.h"
 #include "exec/vaddr.h"
 
+// C语言模拟C++多态，这里面有多种类型的函数指针，具体怎么用，根据目标架构对操作集的初始化注册，比如
+// target/riscv/tcg/tcg-cpu.c中的riscv_tcg_ops中注册了四个函数，这四个函数就是四种多态
 struct TCGCPUOps {
     /**
      * @initialize: Initialize TCG state

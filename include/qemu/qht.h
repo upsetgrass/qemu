@@ -12,12 +12,12 @@
 #include "qemu/qdist.h"
 
 typedef bool (*qht_cmp_func_t)(const void *a, const void *b);
-
+// 
 struct qht {
-    struct qht_map *map;
-    qht_cmp_func_t cmp;
+    struct qht_map *map; // 哈希表数据 
+    qht_cmp_func_t cmp; // 两个TB是否相等
     QemuMutex lock; /* serializes setters of ht->map */
-    unsigned int mode;
+    unsigned int mode; // 当前表的行为控制
 };
 
 /**

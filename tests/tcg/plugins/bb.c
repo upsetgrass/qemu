@@ -131,3 +131,4 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
     qemu_plugin_register_atexit_cb(id, plugin_exit, NULL);
     return 0;
 }
+

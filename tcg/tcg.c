@@ -1661,21 +1661,21 @@ void tcg_prologue_init(void)
     tcg_region_prologue_set(s);
 }
 
-void tcg_func_start(TCGContext *s)
+void tcg_func_start(TCGContext *s) // tcg_ctx上下文初始化
 {
-    tcg_pool_reset(s);
-    s->nb_temps = s->nb_globals;
+    tcg_pool_reset(s); // 清空分配池
+    s->nb_temps = s->nb_globals; // 清空局部，保留全局
 
     /* No temps have been previously allocated for size or locality.  */
-    tcg_temp_ebb_reset_freed(s);
+    tcg_temp_ebb_reset_freed(s); // 重置temp被释放的记录，temp是TCG IR中的中间变量，表示寄存器或中间结果，会频繁创建、使用、释放
 
     /* No constant temps have been previously allocated. */
     for (int i = 0; i < TCG_TYPE_COUNT; ++i) {
         if (s->const_table[i]) {
-            g_hash_table_remove_all(s->const_table[i]);
+            g_hash_table_remove_all(s->const_table[i]); // 常量值对应的temp重用表
         }
     }
-
+    // 各种计数、栈帧偏移重置
     s->nb_ops = 0;
     s->nb_labels = 0;
     s->current_frame_offset = s->frame_start;
@@ -1683,8 +1683,8 @@ void tcg_func_start(TCGContext *s)
 #ifdef CONFIG_DEBUG_TCG
     s->goto_tb_issue_mask = 0;
 #endif
-
-    QTAILQ_INIT(&s->ops);
+    // 初始化IR操作链表、标签队列
+    QTAILQ_INIT(&s->ops); 
     QTAILQ_INIT(&s->free_ops);
     s->emit_before_op = NULL;
     QSIMPLEQ_INIT(&s->labels);
@@ -5656,8 +5656,8 @@ static void tcg_reg_alloc_call(TCGContext *s, TCGOp *op)
         load_arg_ref(s, 0, ts->mem_base->reg, ts->mem_offset, &allocated_regs);
     }
 
-    tcg_out_call(s, tcg_call_func(op), info);
-
+    tcg_out_call(s, tcg_call_func(op), info); // 真正生成调用指令并存放到tcg_ctx->code_buf
+    
     /* Assign output registers and emit moves if needed.  */
     switch (info->out_kind) {
     case TCG_CALL_RET_NORMAL:
@@ -6311,12 +6311,13 @@ static void tcg_out_st_helper_args(TCGContext *s, const TCGLabelQemuLdst *ldst,
 
     tcg_out_helper_load_common_args(s, ldst, parm, info, next_arg);
 }
-
+// tcg_gen_code(tcg_ctx, tb, pc)
 int tcg_gen_code(TCGContext *s, TranslationBlock *tb, uint64_t pc_start)
 {
     int i, start_words, num_insns;
     TCGOp *op;
 
+    // 日志打印、调试检查
     if (unlikely(qemu_loglevel_mask(CPU_LOG_TB_OP)
                  && qemu_log_in_addr_range(pc_start))) {
         FILE *logfile = qemu_log_trylock();
@@ -6344,17 +6345,17 @@ int tcg_gen_code(TCGContext *s, TranslationBlock *tb, uint64_t pc_start)
         assert(!error);
     }
 #endif
-
+    // IR中间代码优化
     /* Do not reuse any EBB that may be allocated within the TB. */
-    tcg_temp_ebb_reset_freed(s);
+    tcg_temp_ebb_reset_freed(s); // 清除内部 EBB（Extended Basic Block）结构中的已释放temp
 
-    tcg_optimize(s);
+    tcg_optimize(s); // 基础IR优化，常量传播，消除无用指令
 
-    reachable_code_pass(s);
-    liveness_pass_0(s);
-    liveness_pass_1(s);
+    reachable_code_pass(s); // 死代码消除
+    liveness_pass_0(s); // 活跃变量分析
+    liveness_pass_1(s); // 活跃变量分析
 
-    if (s->nb_indirects > 0) {
+    if (s->nb_indirects > 0) { // 间接临时寄存器替换
         if (unlikely(qemu_loglevel_mask(CPU_LOG_TB_OP_IND)
                      && qemu_log_in_addr_range(pc_start))) {
             FILE *logfile = qemu_log_trylock();
@@ -6367,7 +6368,7 @@ int tcg_gen_code(TCGContext *s, TranslationBlock *tb, uint64_t pc_start)
         }
 
         /* Replace indirect temps with direct temps.  */
-        if (liveness_pass_2(s)) {
+        if (liveness_pass_2(s)) {// 间接替换为直接
             /* If changes were made, re-run liveness.  */
             liveness_pass_1(s);
         }
@@ -6389,7 +6390,8 @@ int tcg_gen_code(TCGContext *s, TranslationBlock *tb, uint64_t pc_start)
     tb->jmp_reset_offset[1] = TB_JMP_OFFSET_INVALID;
     tb->jmp_insn_offset[0] = TB_JMP_OFFSET_INVALID;
     tb->jmp_insn_offset[1] = TB_JMP_OFFSET_INVALID;
-
+    
+    // 生成代码前初始化
     tcg_reg_alloc_start(s);
 
     /*
@@ -6397,7 +6399,7 @@ int tcg_gen_code(TCGContext *s, TranslationBlock *tb, uint64_t pc_start)
      * TODO: Move this into translate-all.c with the rest of the
      * buffer management.  Having only this done here is confusing.
      */
-    s->code_buf = tcg_splitwx_to_rw(tb->tc.ptr);
+    s->code_buf = tcg_splitwx_to_rw(tb->tc.ptr); // 代码区转为rw模式
     s->code_ptr = s->code_buf;
     s->data_gen_ptr = NULL;
 
@@ -6406,19 +6408,22 @@ int tcg_gen_code(TCGContext *s, TranslationBlock *tb, uint64_t pc_start)
 
     start_words = s->insn_start_words;
     s->gen_insn_data =
-        tcg_malloc(sizeof(uint64_t) * s->gen_tb->icount * start_words);
+        tcg_malloc(sizeof(uint64_t) * s->gen_tb->icount * start_words); // 为每条IR分配insn_data存储空间
 
     tcg_out_tb_start(s);
 
     num_insns = -1;
-    QTAILQ_FOREACH(op, &s->ops, link) {
+    QTAILQ_FOREACH(op, &s->ops, link) {// QTAILQ_FOREACH是链表遍历
         TCGOpcode opc = op->opc;
-
+        // 针对不同类型的指令调用不同的代码生成函数
+        // 生成的host代码放在[tcg_ctx->code_buf, tcg_ctx->code_ptr]这段缓存区域中
         switch (opc) {
         case INDEX_op_mov_i32:
         case INDEX_op_mov_i64:
         case INDEX_op_mov_vec:
-            tcg_reg_alloc_mov(s, op);
+            // tcg/riscv/tcg-target.c.inc:tcg_out_opc_reg
+            // tcg.c:tcg_out32
+            tcg_reg_alloc_mov(s, op); // 寄存器或内存的move操作
             break;
         case INDEX_op_dup_vec:
             tcg_reg_alloc_dup(s, op);
@@ -6482,27 +6487,27 @@ int tcg_gen_code(TCGContext *s, TranslationBlock *tb, uint64_t pc_start)
     tcg_debug_assert(num_insns + 1 == s->gen_tb->icount);
     s->gen_insn_end_off[num_insns] = tcg_current_code_size(s);
 
-    /* Generate TB finalization at the end of block */
-    i = tcg_out_ldst_finalize(s);
+    /* Generate TB finalization at the end of block */ 
+    i = tcg_out_ldst_finalize(s); // 解决访存类指令的 pending 修正
     if (i < 0) {
         return i;
     }
-    i = tcg_out_pool_finalize(s);
+    i = tcg_out_pool_finalize(s); // 把 deferred 的常量池填进去
     if (i < 0) {
         return i;
     }
-    if (!tcg_resolve_relocs(s)) {
+    if (!tcg_resolve_relocs(s)) { // 地址 patch
         return -2;
     }
 
 #ifndef CONFIG_TCG_INTERPRETER
-    /* flush instruction cache */
+    /* flush instruction cache */    // 指令缓存刷新
     flush_idcache_range((uintptr_t)tcg_splitwx_to_rx(s->code_buf),
                         (uintptr_t)s->code_buf,
                         tcg_ptr_byte_diff(s->code_ptr, s->code_buf));
 #endif
 
-    return tcg_current_code_size(s);
+    return tcg_current_code_size(s); // s->code_ptr - s->code_buf 字节数-生成的目标代码的字节数
 }
 
 #ifdef ELF_HOST_MACHINE

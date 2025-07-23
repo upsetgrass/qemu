@@ -48,7 +48,7 @@ static inline unsigned int tb_jmp_cache_hash_func(vaddr pc)
     vaddr tmp;
     tmp = pc ^ (pc >> (TARGET_PAGE_BITS - TB_JMP_PAGE_BITS));
     return (((tmp >> (TARGET_PAGE_BITS - TB_JMP_PAGE_BITS)) & TB_JMP_PAGE_MASK)
-           | (tmp & TB_JMP_ADDR_MASK));
+           | (tmp & TB_JMP_ADDR_MASK)); // TB_JMP_ADDR_MASK-0x3F
 }
 
 #else

@@ -64,7 +64,7 @@ int cpu_watchpoint_address_matches(CPUState *cpu, vaddr addr, vaddr len)
     return ret;
 }
 
-/* Generate a debug exception if a watchpoint has been hit.  */
+/* Generate a debug exception if a watchpoint has been hit. 检测点被命中，则生成一个调试异常 */
 void cpu_check_watchpoint(CPUState *cpu, vaddr addr, vaddr len,
                           MemTxAttrs attrs, int flags, uintptr_t ra)
 {
