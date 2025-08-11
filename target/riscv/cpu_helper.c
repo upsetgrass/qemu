@@ -2243,9 +2243,12 @@ static void riscv_do_nmi(CPURISCVState *env, target_ulong cause, bool virt)
  * Adapted from Spike's processor_t::take_trap.
  *
  */
+// static uint64_t interrup_num = 0;
+static int i = 0;
 void riscv_cpu_do_interrupt(CPUState *cs)
 {
-    RISCVCPU *cpu = RISCV_CPU(cs);
+    RISCVCPU *cpu = RISCV_CPU(cs); // target/riscv/cpu.h:ArchCPU
+
     CPURISCVState *env = &cpu->env;
     bool virt = env->virt_enabled;
     bool write_gva = false;
@@ -2260,6 +2263,11 @@ void riscv_cpu_do_interrupt(CPUState *cs)
      */
     bool async = !!(cs->exception_index & RISCV_EXCP_INT_FLAG);
     target_ulong cause = cs->exception_index & RISCV_EXCP_INT_MASK;
+    target_ulong cause1 = cs->exception_index & RISCV_EXCP_INT_MASK1;
+
+    // mcause cause_ = (mcause)cause1;
+    // record_cpu_interrupt(cpu, cause_); // add 
+
     uint64_t deleg = async ? env->mideleg : env->medeleg;
     bool s_injected = env->mvip & (1ULL << cause) & env->mvien &&
         !(env->mip & (1ULL << cause));
@@ -2303,6 +2311,7 @@ void riscv_cpu_do_interrupt(CPUState *cs)
         case RISCV_EXCP_STORE_PAGE_FAULT:
             if (always_storeamo) {
                 cause = promote_load_fault(cause);
+                cause1 = promote_load_fault(cause1);
             }
             write_gva = env->two_stage_lookup;
             tval = env->badaddr;
@@ -2365,16 +2374,34 @@ void riscv_cpu_do_interrupt(CPUState *cs)
                 cause = RISCV_EXCP_U_ECALL;
             }
         }
+        if (cause1 == RISCV_EXCP_U_ECALL) {
+            assert(env->priv <= 3);
+
+            if (env->priv == PRV_M) {
+                cause1 = RISCV_EXCP_M_ECALL;
+            } else if (env->priv == PRV_S && env->virt_enabled) {
+                cause1 = RISCV_EXCP_VS_ECALL;
+            } else if (env->priv == PRV_S && !env->virt_enabled) {
+                cause1 = RISCV_EXCP_S_ECALL;
+            } else if (env->priv == PRV_U) {
+                cause1 = RISCV_EXCP_U_ECALL;
+            }
+        }
     }
 
     trace_riscv_trap(env->mhartid, async, cause, env->pc, tval,
                      riscv_cpu_get_trap_name(cause, async));
 
-    qemu_log_mask(CPU_LOG_INT,
-                  "%s: hart:"TARGET_FMT_ld", async:%d, cause:"TARGET_FMT_lx", "
-                  "epc:0x"TARGET_FMT_lx", tval:0x"TARGET_FMT_lx", desc=%s\n",
-                  __func__, env->mhartid, async, cause, env->pc, tval,
-                  riscv_cpu_get_trap_name(cause, async));
+    record_cpu_interrupt(cpu, cause1); // add 
+    i++;
+    if(i % 1000 == 0)
+    {
+        qemu_log_mask(CPU_LOG_INT,
+                "%s: hart:"TARGET_FMT_ld", async:%d, cause:"TARGET_FMT_lx", "
+                "epc:0x"TARGET_FMT_lx", tval:0x"TARGET_FMT_lx", desc=%s\n",
+                __func__, env->mhartid, async, cause1, env->pc, tval,
+                riscv_cpu_get_trap_name(cause, async));
+    }
 
     mode = env->priv <= PRV_S && cause < 64 &&
         (((deleg >> cause) & 1) || s_injected || vs_injected) ? PRV_S : PRV_M;

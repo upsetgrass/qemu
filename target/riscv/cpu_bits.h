@@ -731,7 +731,9 @@ typedef enum RISCVException {
 
 #define RISCV_EXCP_INT_FLAG                0x80000000
 #define RISCV_EXCP_INT_MASK                0x7fffffff
-
+#define RISCV_EXCP_INT_MASK1               0x800000007fffffff
+// #define RISCV_EXCP_INT_MASK1               0xffffffff
+// #define RISCV_EXCP_INT_
 /* Interrupt causes */
 #define IRQ_U_SOFT                         0
 #define IRQ_S_SOFT                         1
@@ -750,6 +752,24 @@ typedef enum RISCVException {
 #define IRQ_LOCAL_MAX                      64
 /* -1 is due to bit zero of hgeip and hgeie being ROZ. */
 #define IRQ_LOCAL_GUEST_MAX                (TARGET_LONG_BITS - 1)
+
+typedef enum mcause{
+    Mcause_Irq_U_SOFT    = 0,
+    Mcause_Irq_S_SOFT    = 1,
+    Mcause_Irq_VS_SOFT   = 2,   
+    Mcause_Irq_M_SOFT    = 3,    
+    Mcause_Irq_U_TIMER   = 4,   
+    Mcause_Irq_S_TIMER   = 5,   
+    Mcause_Irq_VS_TIMER  = 6,  
+    Mcause_Irq_M_TIMER   = 7,   
+    Mcause_Irq_U_EXT     = 8,
+    Mcause_Irq_S_EXT     = 9,    
+    Mcause_Irq_VS_EXT    = 10,     
+    Mcause_Irq_M_EXT     = 11,      
+    Mcause_Irq_S_GEXT    = 12,     
+    Mcause_Irq_PMU_OVF   = 13,  
+    Mcause_Irq_LOCAL_MAX = 64 
+}mcause;
 
 /* RNMI causes */
 #define RNMI_MAX                           16

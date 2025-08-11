@@ -784,7 +784,7 @@ static inline bool icount_exit_request(CPUState *cpu)
     }
     return cpu->neg.icount_decr.u16.low + cpu->icount_extra == 0;
 }
-
+// 中断处理流程
 static inline bool cpu_handle_interrupt(CPUState *cpu,
                                         TranslationBlock **last_tb)
 {
@@ -960,6 +960,7 @@ cpu_exec_loop(CPUState *cpu, SyncClocks *sc)
         TranslationBlock *last_tb = NULL;
         int tb_exit = 0;
         // 检查是否有中断需要处理，同上，是否跳出循环，返回ret
+        // qemu_log_mask->riscv_cpu_do_interrupt->riscv_cpu_exec_interrupt->cpu_exec_interrupt->cpu_handle_interrupt
         while (!cpu_handle_interrupt(cpu, &last_tb)) {
             TranslationBlock *tb; // // TB中存的是一段已经翻译完的guest 指令的映射，tb结构体中存储了pc、cs_base flags cflags信息
             vaddr pc; // 当前指令地址

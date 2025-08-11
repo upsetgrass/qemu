@@ -6,7 +6,7 @@ int main()
 	{
 		if(i % 5000 == 999)
 		{
-			printf("i = %d\n", i);
+			printf("i = %d\t", i);
 		}
 	}
 	printf("finish!\n");

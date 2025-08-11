@@ -470,7 +470,7 @@ const QEMULogItem qemu_log_items[] = {
     { LOG_TB_OP_PLUGIN, "op_plugin",
       "show micro ops before plugin injection" },
 #endif
-    { CPU_LOG_INT, "int",
+    { CPU_LOG_INT, "int", // target/riscv/cpu_helper.c:2373
       "show interrupts/exceptions in short format" },
     { CPU_LOG_EXEC, "exec",
       "show trace before each executed TB (lots of logs)" },

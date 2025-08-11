@@ -37,7 +37,7 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
                QEMU_PLUGIN_CB_NO_REGS-不需要 
                QEMU_PLUGIN_CB_R_REGS-需要读取寄存器状态,保存一次读寄存器
                QEMU_PLUGIN_CB_RW_REGS-需要读+写寄存器状态，在执行时保存寄存器，且允许修改寄存器，然后写回
-            第四个参数是传给回调的参数，是自定义类型
+            第四个参数是传给回调的参数，是自定义类型  unsigned int vcpu_index
         */
         uint64_t addr = qemu_plugin_insn_vaddr(insn);
         gpointer key = GINT_TO_POINTER(addr);
@@ -55,6 +55,7 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
 // plugin结束时一般用于统计、释放之前创建的空间等
 static void plugin_exit(qemu_plugin_id_t id, void *p)
 {
+    
     GString* msg = g_string_new(NULL);
     uint64_t val = qemu_plugin_u64_sum(insn_count);
     int vcpu_num = qemu_plugin_num_vcpus();
@@ -76,6 +77,7 @@ static void plugin_exit(qemu_plugin_id_t id, void *p)
 */
 QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id, const qemu_info_t *info, int argc, char **argv)
 {
+    printf("max_vcpus:%d\n", qemu_plugin_num_vcpus());
     fprintf(stdout, "success to start the plugin!\n");
     insn_addrs = g_hash_table_new(g_direct_hash, g_direct_equal);
     if (info->version.cur < 3){

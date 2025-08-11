@@ -508,10 +508,24 @@ struct CPUArchState {
  *
  * A RISCV CPU.
  */
+#include <glib.h>
+#include "./cpu_bits.h"
+
+typedef struct {
+    GHashTable* interrupt_map;  // key: mcause, value: uint64_t
+    QemuSpin lock;              // 保护并发访问
+} InterruptCounter;
+
+
 struct ArchCPU {
     CPUState parent_obj;
 
     CPURISCVState env; // ArchCPU.env就是 CPUArchState
+    
+    QemuSpin interrupt_count_lock;  // add
+    uint64_t interrupt_count;       // add
+    
+    InterruptCounter interrupt_counter;
 
     GDBFeature dyn_csr_feature;
     GDBFeature dyn_vreg_feature;
@@ -548,7 +562,8 @@ static inline int riscv_has_ext(CPURISCVState *env, target_ulong ext)
 }
 
 #include "cpu_user.h"
-
+void record_cpu_interrupt(RISCVCPU *cpu, target_ulong cause);
+GHashTable* get_cpu_interrupt_stats(CPUState *cpu);
 extern const char * const riscv_int_regnames[];
 extern const char * const riscv_int_regnamesh[];
 extern const char * const riscv_fpr_regnames[];
@@ -798,8 +813,12 @@ static inline uint32_t vext_get_vlmax(uint32_t vlenb, uint32_t vsew,
 
 void cpu_get_tb_cpu_state(CPURISCVState *env, vaddr *pc,
                           uint64_t *cs_base, uint32_t *pflags);
-
+void clear_interrupt_counter(InterruptCounter *ic);
+void riscv_clear_all_interrupt_stats(void);
 bool riscv_cpu_is_32bit(RISCVCPU *cpu);
+void riscv_cpu_statistics_(bool clear_after_log);
+// void riscv_cpu_statistics();
+void riscv_cpu_statistics(void);
 
 bool riscv_cpu_virt_mem_enabled(CPURISCVState *env);
 RISCVPmPmm riscv_pm_get_pmm(CPURISCVState *env);

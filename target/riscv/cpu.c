@@ -38,6 +38,7 @@
 #include "kvm/kvm_riscv.h"
 #include "tcg/tcg-cpu.h"
 #include "tcg/tcg.h"
+#include <stdbool.h>
 
 /* RISC-V CPU definitions */
 static const char riscv_single_letter_exts[] = "IEMAFDQCBPVH";
@@ -1277,10 +1278,65 @@ void riscv_cpu_finalize_features(RISCVCPU *cpu, Error **errp)
     }
 }
 
-static void riscv_cpu_realize(DeviceState *dev, Error **errp)
+// add
+void record_cpu_interrupt(RISCVCPU *cpu, target_ulong cause) {
+    // RISCVCPU *cpu = RISCV_CPU(cs);
+    InterruptCounter *ic = &cpu->interrupt_counter;
+
+    // 最高位为0不统计，直接返回
+    if((cause >> (sizeof(cause)*8 - 1)) == 0) return;
+
+    qemu_spin_lock(&cpu->interrupt_count_lock);
+    cpu->interrupt_count++;
+    qemu_spin_unlock(&cpu->interrupt_count_lock);
+
+    qemu_spin_lock(&ic->lock);
+    // CPURISCVState *env = &cpu->env;
+    uint64_t *count = g_hash_table_lookup(ic->interrupt_map, GINT_TO_POINTER(cause));
+    if (!count) {
+        count = g_new0(uint64_t, 1);
+        g_hash_table_insert(ic->interrupt_map, GINT_TO_POINTER(cause), count);
+    }
+    (*count)++;
+    
+    qemu_spin_unlock(&ic->lock);
+}
+
+// add
+GHashTable* get_cpu_interrupt_stats(CPUState *cs) {
+    RISCVCPU *cpu = RISCV_CPU(cs);
+    InterruptCounter *ic = &cpu->interrupt_counter;
+    GHashTable *copy;
+
+    qemu_spin_lock(&ic->lock);
+    copy = g_hash_table_new_full(g_direct_hash, g_direct_equal, NULL, g_free);
+    
+    GHashTableIter iter;
+    gpointer key, value;
+    g_hash_table_iter_init(&iter, ic->interrupt_map);
+    
+    while (g_hash_table_iter_next(&iter, &key, &value)) {
+        uint64_t *new_count = g_memdup(value, sizeof(uint64_t));
+        g_hash_table_insert(copy, key, new_count);
+    }
+    
+    qemu_spin_unlock(&ic->lock);
+    return copy;
+}
+
+static void init_interrupt_counter(InterruptCounter *ic) {
+    ic->interrupt_map = g_hash_table_new(g_direct_hash, g_direct_equal);
+    qemu_spin_init(&ic->lock);
+}
+static void riscv_cpu_realize(DeviceState *dev, Error **errp) // 实例初始化，每个CPU执行一次
 {
     CPUState *cs = CPU(dev);
     RISCVCPU *cpu = RISCV_CPU(dev);
+    
+    qemu_spin_init(&cpu->interrupt_count_lock);  // add
+    cpu->interrupt_count = 0;                          // add
+    init_interrupt_counter(&cpu->interrupt_counter);  // add
+
     RISCVCPUClass *mcc = RISCV_CPU_GET_CLASS(dev);
     Error *local_err = NULL;
 
@@ -3066,13 +3122,112 @@ static void riscv_cpu_common_class_init(ObjectClass *c, void *data)
     device_class_set_props(dc, riscv_cpu_properties);
 }
 
-static void riscv_cpu_class_init(ObjectClass *c, void *data)
+
+void clear_interrupt_counter(InterruptCounter *ic) {
+    qemu_spin_lock(&ic->lock);
+    
+    GHashTableIter iter;
+    gpointer key, value;
+    g_hash_table_iter_init(&iter, ic->interrupt_map);
+    
+    while (g_hash_table_iter_next(&iter, &key, &value)) {
+        uint64_t *count = value;
+        *count = 0;
+    }
+    
+    qemu_spin_unlock(&ic->lock);
+}
+
+void riscv_clear_all_interrupt_stats(void) {
+    CPUState *cpu;
+    CPU_FOREACH(cpu) {
+        RISCVCPU *rcpu = RISCV_CPU(cpu);
+        // 清除简单计数器
+        qemu_spin_lock(&rcpu->interrupt_count_lock);
+        rcpu->interrupt_count = 0;
+        qemu_spin_unlock(&rcpu->interrupt_count_lock);
+        
+        // 清除详细分类计数器
+        if (rcpu->interrupt_counter.interrupt_map) {
+            clear_interrupt_counter(&rcpu->interrupt_counter);
+        }
+    }
+}
+
+void riscv_cpu_statistics_(bool clear_after_log)
+{
+    CPUState *cpu;
+    FILE *logfile = qemu_log_trylock();
+    if (!logfile) {
+        return;
+    }
+    
+    uint64_t count_fin = 0;
+    CPU_FOREACH(cpu) {
+        RISCVCPU *rcpu = RISCV_CPU(cpu);
+        
+        // 输出综合计数器
+        qemu_spin_lock(&rcpu->interrupt_count_lock);
+        fprintf(logfile, "CPU%"PRId64" total interrupts: %"PRIu64"\n",
+                rcpu->env.mhartid, rcpu->interrupt_count);
+        count_fin += rcpu->interrupt_count;
+        if (clear_after_log) {
+            qemu_spin_unlock(&rcpu->interrupt_count_lock);
+            riscv_clear_all_interrupt_stats();
+            qemu_spin_lock(&rcpu->interrupt_count_lock);
+            // rcpu->interrupt_count = 0;
+        }
+        qemu_spin_unlock(&rcpu->interrupt_count_lock);
+        
+        // 输出详细分类计数器
+        if (rcpu->interrupt_counter.interrupt_map) {
+            qemu_spin_lock(&rcpu->interrupt_counter.lock);
+            fprintf(logfile, "Detailed interrupts:\n");
+            
+            GHashTableIter iter;
+            gpointer key, value;
+            g_hash_table_iter_init(&iter, rcpu->interrupt_counter.interrupt_map);
+            
+            while (g_hash_table_iter_next(&iter, &key, &value)) {
+                mcause cause = GPOINTER_TO_INT(key);
+                uint64_t count = *(uint64_t*)value;
+                fprintf(logfile, "  Cause %d: %"PRIu64"\n", cause, count);
+                if (clear_after_log) {
+                    qemu_spin_unlock(&rcpu->interrupt_count_lock);
+                    riscv_clear_all_interrupt_stats();
+                    qemu_spin_lock(&rcpu->interrupt_count_lock);
+                }
+            }
+            qemu_spin_unlock(&rcpu->interrupt_counter.lock);
+        }
+    }
+    
+    qemu_log_mask(CPU_LOG_INT, "Total CPU_interrupt_count:%"PRIu64"\n", count_fin);
+    qemu_log_unlock(logfile);
+}
+
+void riscv_cpu_statistics(void) {
+    riscv_cpu_statistics_(false); // 默认不清空
+}
+
+static bool stats_registered = false; // 防止重复注册
+static void riscv_cpu_class_init(ObjectClass *c, void *data) // 类初始化，仅执行一次
 {
     RISCVCPUClass *mcc = RISCV_CPU_CLASS(c);
+    // DeviceClass *dc = DEVICE_CLASS(c);  // add 有riscv_cpu_common_class_init在初始化riscv_cpu_realize
 
     mcc->misa_mxl_max = (RISCVMXL)GPOINTER_TO_UINT(data);
     riscv_cpu_validate_misa_mxl(mcc);
+
+    // dc->realize = riscv_cpu_realize;        // add 
+    if (!stats_registered) {                // add
+        atexit(riscv_cpu_statistics);       // add
+        stats_registered = true;
+        // stats_initialized = true;
+    }
 }
+
+// s
 
 static void riscv_isa_string_ext(RISCVCPU *cpu, char **isa_str,
                                  int max_str_len)
