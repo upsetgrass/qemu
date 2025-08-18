@@ -3161,48 +3161,62 @@ void riscv_cpu_statistics_(bool clear_after_log)
     if (!logfile) {
         return;
     }
-    
+
+    // 清空文件内容
+    int fd = fileno(logfile);
+    if (fd >= 0) {
+        if (ftruncate(fd, 0) < 0) {
+            // perror("ftruncate failed");
+            qemu_log_unlock(logfile);
+            return;
+        }
+        fseek(logfile, 0, SEEK_SET);
+    }
+
     uint64_t count_fin = 0;
+    int written_bytes = 0;
     CPU_FOREACH(cpu) {
         RISCVCPU *rcpu = RISCV_CPU(cpu);
-        
-        // 输出综合计数器
+
         qemu_spin_lock(&rcpu->interrupt_count_lock);
-        fprintf(logfile, "CPU%"PRId64" total interrupts: %"PRIu64"\n",
-                rcpu->env.mhartid, rcpu->interrupt_count);
+        // written_bytes += fprintf(logfile, "CPU%" PRId64 " total interrupts: %" PRIu64 "\n",
+        //         rcpu->env.mhartid, rcpu->interrupt_count);
+    #ifdef CONFIG_USER_ONLY
+        written_bytes += fprintf(logfile, "CPU%d total interrupts: %" PRIu64 "\n",
+                cpu->cpu_index, rcpu->interrupt_count);
+    #else
+        written_bytes += fprintf(logfile, "CPU%ld (hartid=%ld) total interrupts: %" PRIu64 "\n",
+                cpu->cpu_index,
+                rcpu->env.mhartid,
+                rcpu->interrupt_count);
+    #endif
+
         count_fin += rcpu->interrupt_count;
         if (clear_after_log) {
             qemu_spin_unlock(&rcpu->interrupt_count_lock);
             riscv_clear_all_interrupt_stats();
             qemu_spin_lock(&rcpu->interrupt_count_lock);
-            // rcpu->interrupt_count = 0;
         }
         qemu_spin_unlock(&rcpu->interrupt_count_lock);
-        
-        // 输出详细分类计数器
+
         if (rcpu->interrupt_counter.interrupt_map) {
             qemu_spin_lock(&rcpu->interrupt_counter.lock);
-            fprintf(logfile, "Detailed interrupts:\n");
-            
+            written_bytes += fprintf(logfile, "Detailed interrupts:\n");
+
             GHashTableIter iter;
             gpointer key, value;
             g_hash_table_iter_init(&iter, rcpu->interrupt_counter.interrupt_map);
-            
+
             while (g_hash_table_iter_next(&iter, &key, &value)) {
                 mcause cause = GPOINTER_TO_INT(key);
                 uint64_t count = *(uint64_t*)value;
-                fprintf(logfile, "  Cause %d: %"PRIu64"\n", cause, count);
-                if (clear_after_log) {
-                    qemu_spin_unlock(&rcpu->interrupt_count_lock);
-                    riscv_clear_all_interrupt_stats();
-                    qemu_spin_lock(&rcpu->interrupt_count_lock);
-                }
+                written_bytes += fprintf(logfile, "  Cause %d: %" PRIu64 "\n", cause, count);
             }
             qemu_spin_unlock(&rcpu->interrupt_counter.lock);
         }
     }
-    
-    qemu_log_mask(CPU_LOG_INT, "Total CPU_interrupt_count:%"PRIu64"\n", count_fin);
+    written_bytes += fprintf(logfile, "Total CPU_interrupt_count:%" PRIu64 "\n", count_fin);
+
     qemu_log_unlock(logfile);
 }
 

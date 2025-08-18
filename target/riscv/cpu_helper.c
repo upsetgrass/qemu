@@ -2394,6 +2394,9 @@ void riscv_cpu_do_interrupt(CPUState *cs)
 
     record_cpu_interrupt(cpu, cause1); // add 
     i++;
+    if (i % 50000 == 0) {
+        riscv_cpu_statistics_(false);
+    }
     if(i % 1000 == 0)
     {
         qemu_log_mask(CPU_LOG_INT,
